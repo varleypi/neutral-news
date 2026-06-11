@@ -9,7 +9,10 @@ function getSupabase() {
   const url = process.env.NEUTRAL_NEWS_SUPABASE_URL || process.env.SPINDETECTOR_SUPABASE_URL
   const key = process.env.NEUTRAL_NEWS_SUPABASE_SERVICE_KEY || process.env.SPINDETECTOR_SUPABASE_SERVICE_KEY
   if (!url || !key) throw new Error('Supabase credentials not set')
-  return createClient(url, key, { realtime: { transport: ws } })
+  return createClient(url, key, {
+    realtime: { transport: ws },
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
 }
 
 async function storeArticles({ articles, date, elapsedSeconds }) {

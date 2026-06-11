@@ -49,8 +49,16 @@ alter table neutral_pipeline_runs enable row level security;
 create policy "Public read neutral_articles"
   on neutral_articles for select using (true);
 
+create policy "Service role write neutral_articles"
+  on neutral_articles for all
+  to service_role using (true) with check (true);
+
 create policy "Public read neutral_pipeline_runs"
   on neutral_pipeline_runs for select using (true);
+
+create policy "Service role write neutral_pipeline_runs"
+  on neutral_pipeline_runs for all
+  to service_role using (true) with check (true);
 
 -- Index for fast homepage query
 create index if not exists idx_neutral_articles_date

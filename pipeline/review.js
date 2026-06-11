@@ -168,10 +168,14 @@ RESPOND WITH JSON ONLY:
     model: 'claude-opus-4-8',
     max_tokens: 800,
     system: CLAUDE_VALIDATION_SYSTEM,
-    messages: [{ role: 'user', content: prompt }],
+    messages: [
+      { role: 'user', content: prompt },
+      { role: 'assistant', content: '{' },
+    ],
   })
 
-  const text = response.content[0]?.text ?? ''
+  const raw = response.content[0]?.text ?? ''
+  const text = '{' + raw
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('No JSON in Claude validation response')
 
