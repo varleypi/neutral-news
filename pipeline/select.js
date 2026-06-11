@@ -24,10 +24,10 @@ async function selectTopClusters(date) {
   // Pull all articles for today that belong to a cluster
   const { data: articles, error } = await supabase
     .from('articles')
-    .select('cluster_id, topic_label, headline, url, outlet_id, bias_score, published_at')
-    .eq('run_date', date)
+    .select('cluster_id, topic_label, headline, url, outlet_id, bias_score, pub_date')
+    .eq('date', date)
     .not('cluster_id', 'is', null)
-    .order('published_at', { ascending: false })
+    .order('pub_date', { ascending: false })
 
   if (error) throw new Error(`Supabase query failed: ${error.message}`)
   if (!articles || articles.length === 0) throw new Error(`No clustered articles found for ${date}`)
@@ -40,7 +40,7 @@ async function selectTopClusters(date) {
       clusterMap.set(cluster_id, { clusterId: cluster_id, topicLabel: topic_label, articles: [], outlets: new Set() })
     }
     const c = clusterMap.get(cluster_id)
-    c.articles.push(article)
+    c.articles.push({ ...article, published_at: article.pub_date })
     c.outlets.add(article.outlet_id)
   }
 
