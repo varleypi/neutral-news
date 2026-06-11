@@ -3,12 +3,13 @@
  */
 
 const { createClient } = require('@supabase/supabase-js')
+const ws = require('ws')
 
 function getSupabase() {
   const url = process.env.NEUTRAL_NEWS_SUPABASE_URL || process.env.SPINDETECTOR_SUPABASE_URL
   const key = process.env.NEUTRAL_NEWS_SUPABASE_SERVICE_KEY || process.env.SPINDETECTOR_SUPABASE_SERVICE_KEY
   if (!url || !key) throw new Error('Supabase credentials not set')
-  return createClient(url, key)
+  return createClient(url, key, { realtime: { transport: ws } })
 }
 
 async function storeArticles({ articles, date, elapsedSeconds }) {

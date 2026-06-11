@@ -74,7 +74,7 @@ async function main() {
     console.log(`ℹ Optional env vars not set: ${missingOptional.join(', ')}`)
   }
 
-  const date = process.env.PIPELINE_DATE ?? new Date().toISOString().split('T')[0]
+  const date = process.env.PIPELINE_DATE || new Date().toISOString().split('T')[0]
   console.log(`📅 Date: ${date}`)
   const startTime = Date.now()
 

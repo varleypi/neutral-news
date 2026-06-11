@@ -7,6 +7,7 @@
  */
 
 const { createClient } = require('@supabase/supabase-js')
+const ws = require('ws')
 
 const MAX_STORIES = 5
 
@@ -14,7 +15,7 @@ function getSupabase() {
   const url = process.env.SPINDETECTOR_SUPABASE_URL
   const key = process.env.SPINDETECTOR_SUPABASE_SERVICE_KEY
   if (!url || !key) throw new Error('SPINDETECTOR_SUPABASE_URL / SPINDETECTOR_SUPABASE_SERVICE_KEY not set')
-  return createClient(url, key)
+  return createClient(url, key, { realtime: { transport: ws } })
 }
 
 async function selectTopClusters(date) {
