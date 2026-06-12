@@ -7,6 +7,7 @@ const isDemoMode =
   process.env.NEXT_PUBLIC_SUPABASE_URL === 'your-supabase-url'
 
 function getClient() {
+  // Frontend uses the anon (public) key only — never the service role key.
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -27,11 +28,18 @@ export async function getTodaysArticles(date?: string): Promise<NeutralArticle[]
     .order('outlet_count', { ascending: false })
     .limit(5)
 
-  if (error) throw new Error(`Failed to fetch articles: ${error.message}`)
+  if (error) {
+    // Fail soft: an empty page beats a crashed build/deploy
+    console.error(`Failed to fetch articles: ${error.message}`)
+    return []
+  }
   return (data ?? []) as NeutralArticle[]
 }
 
 export async function getArticle(id: number): Promise<NeutralArticle | null> {
+  // Reject anything that isn't a plausible row id before it reaches the database
+  if (!Number.isInteger(id) || id < 1 || id > Number.MAX_SAFE_INTEGER) return null
+
   if (isDemoMode) return MOCK_ARTICLES.find(a => a.id === id) ?? null
 
   const supabase = getClient()
@@ -39,6 +47,7 @@ export async function getArticle(id: number): Promise<NeutralArticle | null> {
     .from('neutral_articles')
     .select('*')
     .eq('id', id)
+    .eq('validation_approved', true)
     .single()
 
   if (error) return null

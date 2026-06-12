@@ -1,0 +1,3 @@
+# ads.txt for neutralnews.us
+# Replace pub-0000000000000000 with your AdSense publisher ID once approved.
+# google.com, pub-0000000000000000, DIRECT, f08c47fec0942fa0
