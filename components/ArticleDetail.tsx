@@ -79,6 +79,22 @@ export default function ArticleDetail({ article }: Props) {
         </div>
       )}
 
+      {article.references?.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-3">
+            References
+          </h3>
+          <ol className="space-y-1.5">
+            {article.references.map((ref, i) => (
+              <li key={i} className="flex gap-2.5 text-xs text-slate-500 leading-relaxed">
+                <span className="flex-shrink-0 tabular-nums text-slate-400">{i + 1}.</span>
+                <span>{ref}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
       <ValidationBadge article={article} />
 
       <AdSlot slot="article-footer" format="rectangle" />

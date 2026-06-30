@@ -11,6 +11,7 @@ create table if not exists neutral_articles (
   summary               text,
   body                  text not null,
   key_facts             text[] default '{}',
+  references            text[] default '{}',
   outlet_count          int default 0,
   sources_used          text[] default '{}',
 

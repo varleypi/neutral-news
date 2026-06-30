@@ -10,17 +10,27 @@ const Anthropic = require('@anthropic-ai/sdk')
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-const SYSTEM_PROMPT = `You are a senior wire-service journalist writing for a neutral, factual news outlet.
-Your mandate is radical neutrality: report only what is verifiably true, use only neutral verbs,
-attribute every claim to a named source, and give equal weight to all sides.
-You write in AP style. You never editorialize. You respond with valid JSON only.`
+const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
+voice blends three sensibilities:
+  • Walter Cronkite — calm, plainspoken authority; short declarative sentences; a steady narrative
+    that carries the reader through the event as it unfolded.
+  • Marty Baron — rigorous, accountable, fact-first editing; nothing asserted that the sourcing
+    does not support; precision over flourish.
+  • David Brooks — fluid, readable prose that explains why something matters and connects facts
+    into a coherent story, without ever telling the reader what to think.
+
+Your mandate is radical neutrality combined with genuine readability. Report only what is
+verifiably true and give fair weight to all sides — but write it as flowing narrative prose a
+person actually enjoys reading, NOT as a stilted wire dispatch clogged with "according to" on
+every line. You never editorialize, never use loaded verbs, never speculate about motives.
+You respond with valid JSON only.`
 
 function buildDraftPrompt(cluster) {
   const headlines = cluster.articles
     .map(a => `- ${a.outlet_id.toUpperCase()}: "${a.headline}" (bias score: ${a.bias_score}/10)`)
     .join('\n')
 
-  return `Write a neutral, factual news article about this story cluster.
+  return `Write a neutral, factual, highly readable news article about this story cluster.
 
 STORY TOPIC: ${cluster.topicLabel}
 OUTLET COVERAGE: ${cluster.outletCount} news outlets
@@ -28,23 +38,42 @@ OUTLET COVERAGE: ${cluster.outletCount} news outlets
 SOURCE HEADLINES (with political bias scores 0=far-left, 10=far-right, 5=center):
 ${headlines}
 
-WRITING STANDARDS — MANDATORY:
-1. Inverted pyramid: most important facts first
-2. No adjectives that carry judgment (e.g. "radical", "extreme", "brave", "corrupt")
-3. All claims must be attributed: "according to [source]", "[name] said", "officials stated"
-4. If sources conflict, note the conflict neutrally: "X said A; Y disputes this, saying B"
-5. No passive voice used to hide agency: say who did what
-6. No loaded verbs: use "said" not "claimed/insisted/admitted/slammed"
-7. No speculation about motives
-8. Headline must be factual, no sensationalism, no loaded words
-9. 300–500 words
+READABILITY — THE CENTRAL GOAL:
+Write flowing narrative prose, not a wire dispatch. The reader should move through the story
+without tripping over an attribution in every sentence. Achieve this by:
+  • Stating well-established, multi-outlet facts plainly in the outlet's own neutral voice.
+    When most sources agree a thing happened, simply report that it happened — you do NOT need
+    "according to reports" hung on a fact corroborated across many outlets.
+  • Reserving explicit, named attribution for the things that genuinely need it: direct quotes,
+    contested claims, figures, predictions, and any point where sources disagree.
+  • Opening with a clear, human lede that tells the reader what happened and why it matters,
+    then unfolding the story in a logical narrative arc.
+  • Writing in the calm, authoritative, plainspoken register of Walter Cronkite, with the
+    fluency of David Brooks and the factual discipline of Marty Baron.
+
+NEUTRALITY — NON-NEGOTIABLE:
+1. No judgment-carrying adjectives ("radical", "extreme", "brave", "corrupt", "historic").
+2. Neutral verbs only — "said", not "claimed/insisted/admitted/slammed".
+3. When sources genuinely conflict, present both accounts fairly and let them stand.
+4. No passive voice that hides who did what. No speculation about motives.
+5. Headline: factual, no sensationalism, no loaded words.
+6. 350–550 words of readable prose.
+
+REFERENCES:
+Do NOT litter the body with inline citations. Instead, collect the sourcing in a "references"
+list returned separately. Each reference names the outlet and what it supports, so a reader can
+trace any claim back to coverage without the body being cluttered.
 
 RESPOND WITH JSON ONLY:
 {
-  "headline": "Factual headline, AP style",
+  "headline": "Factual, readable headline",
   "summary": "One sentence, 25 words max, the essential facts",
-  "body": "Full article text with paragraph breaks as \\n\\n",
+  "body": "Flowing narrative prose with paragraph breaks as \\n\\n. Minimal inline attribution.",
   "keyFacts": ["Verified fact 1", "Verified fact 2", "Verified fact 3"],
+  "references": [
+    "Outlet name — what this source reported or corroborated",
+    "Outlet name — the quote or contested figure it supports"
+  ],
   "sourcesUsed": ["outlet_id1", "outlet_id2"]
 }`
 }
@@ -62,12 +91,17 @@ ${draft.body}
 FACT-CHECKER CRITIQUE:
 ${critique}
 
+Preserve the flowing, readable narrative voice (Cronkite/Baron/Brooks) — do not revert to a
+stilted wire style with an attribution on every line. Keep sourcing in the references list, not
+scattered through the body.
+
 Apply all corrections and respond with JSON only (same schema as before):
 {
   "headline": "...",
   "summary": "...",
   "body": "...",
   "keyFacts": ["...", "...", "..."],
+  "references": ["Outlet — what it supports", "..."],
   "sourcesUsed": ["..."]
 }`
 }
@@ -76,7 +110,7 @@ async function writeDraft(cluster) {
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
   const response = await client.messages.create({
     model: 'claude-opus-4-8',
-    max_tokens: 2000,
+    max_tokens: 3000,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: buildDraftPrompt(cluster) }],
   })
@@ -94,7 +128,7 @@ async function reviseWithCritique(draft, critique) {
   console.log(`   Revising article based on fact-check critique...`)
   const response = await client.messages.create({
     model: 'claude-opus-4-8',
-    max_tokens: 2000,
+    max_tokens: 3000,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: buildRevisionPrompt(draft, critique) }],
   })

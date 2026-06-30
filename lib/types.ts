@@ -7,6 +7,7 @@ export interface NeutralArticle {
   summary: string
   body: string
   key_facts: string[]
+  references: string[]
   outlet_count: number
   sources_used: string[]
   grok_review_score: number | null

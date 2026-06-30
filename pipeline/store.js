@@ -27,6 +27,7 @@ async function storeArticles({ articles, date, elapsedSeconds }) {
     summary: a.article.summary,
     body: a.article.body,
     key_facts: a.article.keyFacts,
+    references: a.article.references ?? [],
     outlet_count: a.outletCount,
     sources_used: a.article.sourcesUsed,
     grok_review_score: a.grokReview?.overallScore ?? null,
