@@ -137,13 +137,34 @@ async function claudeFinalValidation(article, grokReviewResult) {
     .map(i => `- [${i.severity}] ${i.type}: "${i.excerpt}" → ${i.correction}`)
     .join('\n') || 'None'
 
+  const references = (article.references ?? []).map(r => `- ${r}`).join('\n') || 'None listed'
+
   const prompt = `Perform final editorial validation of this news article before publication.
+
+HOUSE STYLE — READ CAREFULLY BEFORE JUDGING:
+This outlet publishes fluid narrative prose in the tradition of Walter Cronkite, Marty Baron,
+and David Brooks — NOT stilted wire copy. By design:
+  • Facts that are corroborated across multiple outlets are stated plainly in the article's own
+    neutral voice. This is CORRECT. Do NOT flag a well-established, multi-source fact as
+    "unattributed" or "unsupported" simply because it lacks an inline "according to". Requiring
+    inline attribution on every sentence is explicitly against house style.
+  • Sourcing lives in a separate REFERENCES list (provided below), not scattered through the body.
+    A claim is properly sourced if the references list supports it — it does not need an inline cite.
+  • Reserve concern for genuine neutrality problems: loaded/judgmental language, editorializing,
+    telling the reader what to conclude, unfair representation of a side, a sensational headline,
+    or a specific contested claim/figure/quote that nothing in the references supports.
+
+Judge neutrality and factual support — do NOT penalize the deliberately readable, low-inline-
+attribution style. Plain, confident narration of corroborated fact is exactly what we want.
 
 ARTICLE:
 Headline: ${article.headline}
 Summary: ${article.summary}
 Body:
 ${article.body}
+
+REFERENCES (the sourcing backing this article):
+${references}
 
 PRIOR REVIEW ISSUES (should be addressed in this version):
 ${issuesSummary}
@@ -152,8 +173,11 @@ Confirm:
 1. The article is factually neutral — no loaded language or editorial opinion
 2. All sides are represented fairly
 3. The headline is accurate and not sensational
-4. The prior review issues have been addressed
-5. The article is ready for publication
+4. No contested claim, figure, or quote lacks support in the references
+5. The prior review issues have been addressed
+
+Approve unless there is a genuine neutrality or factual-support problem. Absence of inline
+attribution is NOT a reason to withhold approval.
 
 RESPOND WITH JSON ONLY:
 {
