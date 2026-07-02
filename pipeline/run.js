@@ -28,6 +28,40 @@ const { storeArticles, logError } = require('./store')
 const REQUIRED_ENV = ['ANTHROPIC_API_KEY', 'SPINDETECTOR_SUPABASE_URL', 'SPINDETECTOR_SUPABASE_SERVICE_KEY']
 const OPTIONAL_ENV = ['XAI_API_KEY', 'NEUTRAL_NEWS_SUPABASE_URL', 'NEUTRAL_NEWS_SUPABASE_SERVICE_KEY', 'VERCEL_DEPLOY_HOOK_URL']
 
+// ── Duplicate-story detection ────────────────────────────────────────────────
+// SpinDetector occasionally produces two clusters for the same real-world event.
+// We compare the significant words of a candidate's headline + topic against the
+// stories already published and skip anything that overlaps too heavily.
+
+const STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'over', 'after',
+  'amid', 'says', 'said', 'will', 'draw', 'both', 'raise', 'raising', 'questions',
+  'new', 'plan', 'plans', 'move', 'moves', 'set', 'sets',
+])
+
+function significantWords(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !STOPWORDS.has(w))
+}
+
+function jaccard(a, b) {
+  const A = new Set(a)
+  const B = new Set(b)
+  if (A.size === 0 || B.size === 0) return 0
+  const intersection = [...A].filter(x => B.has(x)).length
+  const union = new Set([...A, ...B]).size
+  return intersection / union
+}
+
+// True if `candidate` covers the same event as any already-published story.
+function isDuplicateStory(candidateText, publishedTexts, threshold = 0.5) {
+  const cand = significantWords(candidateText)
+  return publishedTexts.some(t => jaccard(cand, significantWords(t)) >= threshold)
+}
+
 async function processCluster(cluster) {
   console.log(`\n  📰 "${cluster.topicLabel}" (${cluster.outletCount} outlets)`)
 
@@ -122,18 +156,35 @@ async function main() {
   const TARGET = 5
   console.log(`\n✍️  Stages 2–6 — Publishing the top ${TARGET} stories that pass validation...`)
   const results = []
+  const publishedTexts = [] // headline + topic of each published story, for dedup
   let processed = 0
   for (const cluster of clusters) {
     if (results.length >= TARGET) break
     processed++
+
+    // Cheap pre-check: skip a cluster whose topic already matches a published
+    // story, before spending a full write/review/validate cycle on it.
+    if (isDuplicateStory(cluster.topicLabel, publishedTexts)) {
+      console.log(`   ⎘ Skipping "${cluster.topicLabel}" — same event as an already-published story`)
+      continue
+    }
+
     try {
       const result = await processCluster(cluster)
-      if (result.validation?.approved) {
-        results.push(result)
-        console.log(`   ✓ Published ${results.length}/${TARGET}: "${result.article.headline}"`)
-      } else {
+      if (!result.validation?.approved) {
         console.log(`   ✗ Rejected by validation — backfilling with next-ranked story`)
+        continue
       }
+      // Final check on the finished headline — catches same-event stories the
+      // topic labels didn't reveal.
+      const candidateText = `${result.article.headline} ${result.topicLabel}`
+      if (isDuplicateStory(candidateText, publishedTexts)) {
+        console.log(`   ⎘ Duplicate of an already-published story — backfilling: "${result.article.headline}"`)
+        continue
+      }
+      results.push(result)
+      publishedTexts.push(candidateText)
+      console.log(`   ✓ Published ${results.length}/${TARGET}: "${result.article.headline}"`)
     } catch (err) {
       console.error(`   ❌ Failed for "${cluster.topicLabel}": ${err.message} — backfilling`)
       // Continue with remaining clusters

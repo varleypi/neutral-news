@@ -48,6 +48,20 @@ async function storeArticles({ articles, date, elapsedSeconds }) {
   if (error) throw new Error(`Failed to store articles: ${error.message}`)
   console.log(`   Stored ${rows.length} articles`)
 
+  // Replace-not-accumulate: remove any rows for this date left over from an
+  // earlier run whose clusters aren't in the current edition. This keeps the
+  // day's published set equal to exactly this run's output (no stale duplicates).
+  const currentClusterIds = rows.map(r => r.cluster_id)
+  const inList = `(${currentClusterIds.map(id => `"${id}"`).join(',')})`
+  const { error: pruneError, count } = await supabase
+    .from('neutral_articles')
+    .delete({ count: 'exact' })
+    .eq('date', date)
+    .not('cluster_id', 'in', inList)
+
+  if (pruneError) console.warn(`   ⚠ Failed to prune stale rows: ${pruneError.message}`)
+  else if (count) console.log(`   Pruned ${count} stale article(s) from earlier runs`)
+
   // Log the pipeline run
   const { error: runError } = await supabase
     .from('neutral_pipeline_runs')
