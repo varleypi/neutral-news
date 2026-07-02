@@ -2,12 +2,14 @@
  * Neutral News — Daily Article Generation Pipeline
  *
  * Stages:
- *   1. Select top 5 story clusters from SpinDetector Supabase (by outlet coverage)
- *   2. Claude drafts a neutral, factual article for each cluster
+ *   1. Select a ranked pool of candidate clusters from SpinDetector (by coverage)
+ *   2. Claude drafts a neutral, factual article for a cluster
  *   3. Grok reviews for factual accuracy and neutrality → returns critique
- *   4. Claude revises the article incorporating Grok's critique
+ *   4. Claude revises the article; Grok re-scores the revised version
  *   5. Claude performs final validation sign-off
- *   6. Store final articles + validation metadata in Supabase
+ *   6. If validation fails, revise once more and re-validate
+ *   7. Work down the pool until 5 stories pass the strict gate; store them
+ *   8. Trigger a Vercel redeploy so the new edition goes live
  *
  * Usage:
  *   node pipeline/run.js                           # today's date
@@ -103,8 +105,8 @@ async function main() {
   console.log(`📅 Date: ${date}`)
   const startTime = Date.now()
 
-  // Stage 1: Select top clusters
-  console.log('\n🔍 Stage 1 — Selecting top story clusters from SpinDetector...')
+  // Stage 1: Select a ranked pool of candidate clusters
+  console.log('\n🔍 Stage 1 — Selecting candidate story clusters from SpinDetector...')
   let clusters
   try {
     clusters = await selectTopClusters(date)
@@ -114,28 +116,43 @@ async function main() {
     process.exit(1)
   }
 
-  // Stages 2–5: Write, review, revise, validate
-  console.log('\n✍️  Stages 2–5 — Writing, reviewing, and validating articles...')
+  // Stages 2–6: Work down the ranked pool, keeping only articles that pass the
+  // strict validation gate, until we have 5 — backfilling with the next-ranked
+  // story whenever one is rejected.
+  const TARGET = 5
+  console.log(`\n✍️  Stages 2–6 — Publishing the top ${TARGET} stories that pass validation...`)
   const results = []
+  let processed = 0
   for (const cluster of clusters) {
+    if (results.length >= TARGET) break
+    processed++
     try {
       const result = await processCluster(cluster)
-      results.push(result)
+      if (result.validation?.approved) {
+        results.push(result)
+        console.log(`   ✓ Published ${results.length}/${TARGET}: "${result.article.headline}"`)
+      } else {
+        console.log(`   ✗ Rejected by validation — backfilling with next-ranked story`)
+      }
     } catch (err) {
-      console.error(`   ❌ Failed for "${cluster.topicLabel}": ${err.message}`)
+      console.error(`   ❌ Failed for "${cluster.topicLabel}": ${err.message} — backfilling`)
       // Continue with remaining clusters
     }
   }
 
+  if (results.length < TARGET) {
+    console.log(`   ⚠ Candidate pool exhausted after ${processed} clusters — publishing ${results.length} of ${TARGET}`)
+  }
+
   if (results.length === 0) {
-    const msg = 'All clusters failed — no articles generated'
+    const msg = 'No clusters passed validation — no articles generated'
     console.error(`❌ ${msg}`)
     await logError(date, msg)
     process.exit(1)
   }
 
-  // Stage 6: Store
-  console.log('\n💾 Stage 6 — Storing articles in Supabase...')
+  // Stage 7: Store
+  console.log('\n💾 Stage 7 — Storing articles in Supabase...')
   const elapsedSeconds = (Date.now() - startTime) / 1000
   try {
     await storeArticles({ articles: results, date, elapsedSeconds })
@@ -145,7 +162,7 @@ async function main() {
     process.exit(1)
   }
 
-  // Stage 7: Trigger a fresh site build so the new articles go live immediately.
+  // Stage 8: Trigger a fresh site build so the new articles go live immediately.
   // Set VERCEL_DEPLOY_HOOK_URL (a Vercel Deploy Hook) to enable. Without it the
   // site still refreshes on its own within the hour via ISR revalidation.
   if (process.env.VERCEL_DEPLOY_HOOK_URL) {
@@ -161,9 +178,8 @@ async function main() {
   }
 
   const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-  const approved = results.filter(r => r.validation?.approved).length
   console.log(`\n✅ Pipeline complete in ${totalElapsed}s`)
-  console.log(`   ${results.length} articles generated · ${approved} approved · ${results.length - approved} flagged`)
+  console.log(`   ${results.length} stories published (all passed the strict validation gate) from ${processed} candidates reviewed`)
 }
 
 main().catch(err => {

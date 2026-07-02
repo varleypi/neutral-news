@@ -1,15 +1,19 @@
 /**
- * Stage 1 — Select today's top 5 story clusters from SpinDetector's Supabase.
+ * Stage 1 — Select today's top story clusters from SpinDetector's Supabase.
  *
  * Ranks clusters by number of outlets covering the story (breadth of coverage
- * is the best proxy for "this is a real top story").  Returns clusters with
- * all their scored articles so the writer stage has full context.
+ * is the best proxy for "this is a real top story").  Returns a ranked POOL of
+ * candidates (larger than the 5 we publish) so the pipeline can backfill with
+ * the next-ranked story whenever one fails validation — the site aims to
+ * publish exactly 5 stories that pass the strict quality gate.
  */
 
 const { createClient } = require('@supabase/supabase-js')
 const ws = require('ws')
 
-const MAX_STORIES = 5
+// How many candidate clusters to return. We publish the first 5 that pass
+// validation; the rest are backfill in rank order.
+const POOL_SIZE = 12
 
 function getSupabase() {
   const url = process.env.SPINDETECTOR_SUPABASE_URL
@@ -44,13 +48,13 @@ async function selectTopClusters(date) {
     c.outlets.add(article.outlet_id)
   }
 
-  // Rank by unique outlet count, take top 5
+  // Rank by unique outlet count; return a pool for publish-with-backfill
   const ranked = [...clusterMap.values()]
     .map(c => ({ ...c, outletCount: c.outlets.size }))
     .sort((a, b) => b.outletCount - a.outletCount)
-    .slice(0, MAX_STORIES)
+    .slice(0, POOL_SIZE)
 
-  console.log(`   Selected ${ranked.length} clusters:`)
+  console.log(`   ${ranked.length} candidate clusters ranked by coverage:`)
   ranked.forEach((c, i) =>
     console.log(`   ${i + 1}. [${c.outletCount} outlets] ${c.topicLabel}`)
   )
