@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import Script from 'next/script'
 import Link from 'next/link'
 import { Inter, Lora } from 'next/font/google'
 import './globals.css'
@@ -153,16 +152,18 @@ function Footer() {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${lora.variable}`}>
-      <body className="bg-white text-slate-900 antialiased">
+      <head>
+        {/* AdSense verification snippet — placed directly in <head> so Google's
+            site verifier finds it in the raw server-rendered HTML. */}
         {ADSENSE_CLIENT && (
-          <Script
-            id="adsense"
+          <script
             async
             src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}`}
             crossOrigin="anonymous"
-            strategy="afterInteractive"
           />
         )}
+      </head>
+      <body className="bg-white text-slate-900 antialiased">
         <Masthead />
         <main className="max-w-3xl mx-auto px-4 py-10">{children}</main>
         <Footer />
