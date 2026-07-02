@@ -33,5 +33,6 @@ jobs:
           SPINDETECTOR_SUPABASE_SERVICE_KEY: ${{ secrets.SPINDETECTOR_SUPABASE_SERVICE_KEY }}
           NEUTRAL_NEWS_SUPABASE_URL: ${{ secrets.NEUTRAL_NEWS_SUPABASE_URL }}
           NEUTRAL_NEWS_SUPABASE_SERVICE_KEY: ${{ secrets.NEUTRAL_NEWS_SUPABASE_SERVICE_KEY }}
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
           PIPELINE_DATE: ${{ github.event.inputs.pipeline_date || '' }}
         run: node pipeline/run.js

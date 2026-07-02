@@ -24,7 +24,7 @@ const { grokReview, claudeFinalValidation } = require('./review')
 const { storeArticles, logError } = require('./store')
 
 const REQUIRED_ENV = ['ANTHROPIC_API_KEY', 'SPINDETECTOR_SUPABASE_URL', 'SPINDETECTOR_SUPABASE_SERVICE_KEY']
-const OPTIONAL_ENV = ['XAI_API_KEY', 'NEUTRAL_NEWS_SUPABASE_URL', 'NEUTRAL_NEWS_SUPABASE_SERVICE_KEY']
+const OPTIONAL_ENV = ['XAI_API_KEY', 'NEUTRAL_NEWS_SUPABASE_URL', 'NEUTRAL_NEWS_SUPABASE_SERVICE_KEY', 'VERCEL_DEPLOY_HOOK_URL']
 
 async function processCluster(cluster) {
   console.log(`\n  📰 "${cluster.topicLabel}" (${cluster.outletCount} outlets)`)
@@ -39,22 +39,30 @@ async function processCluster(cluster) {
   let finalArticle = draft
 
   // Step 4: Revise if issues found
+  let publishedReview = review
   if (review.issues?.length > 0 && review.critiqueText) {
     finalArticle = await reviseWithCritique(draft, review.critiqueText)
+
+    // Re-score the REVISED article so the published Grok score reflects what
+    // readers actually see — not the pre-revision draft.
+    console.log(`   Re-scoring revised article with Grok...`)
+    const rescored = await grokReview(finalArticle, cluster)
+    console.log(`   Grok score after revision: ${rescored.overallScore}/10 (was ${review.overallScore}/10)`)
+    publishedReview = rescored
   } else {
     console.log(`   No issues found — skipping revision`)
   }
 
   // Step 5: Claude final validation
   console.log(`   Running Claude final validation...`)
-  const validation = await claudeFinalValidation(finalArticle, review)
+  const validation = await claudeFinalValidation(finalArticle, publishedReview)
 
   return {
     clusterId: cluster.clusterId,
     topicLabel: cluster.topicLabel,
     outletCount: cluster.outletCount,
     article: finalArticle,
-    grokReview: review,
+    grokReview: publishedReview,
     validation,
   }
 }
@@ -118,6 +126,21 @@ async function main() {
     console.error(`❌ Storage failed: ${err.message}`)
     await logError(date, `Storage failed: ${err.message}`)
     process.exit(1)
+  }
+
+  // Stage 7: Trigger a fresh site build so the new articles go live immediately.
+  // Set VERCEL_DEPLOY_HOOK_URL (a Vercel Deploy Hook) to enable. Without it the
+  // site still refreshes on its own within the hour via ISR revalidation.
+  if (process.env.VERCEL_DEPLOY_HOOK_URL) {
+    console.log('\n🚀 Triggering Vercel redeploy...')
+    try {
+      const res = await fetch(process.env.VERCEL_DEPLOY_HOOK_URL, { method: 'POST' })
+      console.log(res.ok ? '   ✓ Redeploy triggered' : `   ⚠ Deploy hook returned ${res.status}`)
+    } catch (err) {
+      console.warn(`   ⚠ Deploy hook failed: ${err.message}`)
+    }
+  } else {
+    console.log('\nℹ VERCEL_DEPLOY_HOOK_URL not set — site refreshes within the hour via ISR')
   }
 
   const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1)
