@@ -7,7 +7,9 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 const lora = Lora({ subsets: ['latin'], variable: '--font-lora' })
 
-const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT
+// Google AdSense publisher ID. Public (appears in the page source of every
+// AdSense site), so it's safe to keep in the repo. An env var overrides it.
+const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT || 'ca-pub-9164130388115843'
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://neutralnews.us'),
@@ -19,6 +21,10 @@ export const metadata: Metadata = {
     description: 'Five top stories. Zero spin.',
     type: 'website',
     url: 'https://neutralnews.us',
+  },
+  // AdSense site-verification tag
+  other: {
+    'google-adsense-account': ADSENSE_CLIENT,
   },
 }
 
