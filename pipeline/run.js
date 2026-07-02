@@ -55,7 +55,24 @@ async function processCluster(cluster) {
 
   // Step 5: Claude final validation
   console.log(`   Running Claude final validation...`)
-  const validation = await claudeFinalValidation(finalArticle, publishedReview)
+  let validation = await claudeFinalValidation(finalArticle, publishedReview)
+
+  // Step 6: If validation fails, revise once more using its feedback, then
+  // re-validate — rather than discarding the article outright.
+  if (!validation.approved) {
+    const notes = [
+      validation.validationNotes,
+      ...(validation.remainingIssues ?? []),
+    ].filter(Boolean).join('\n')
+
+    if (notes) {
+      console.log(`   Validation flagged the article — revising once more and re-validating...`)
+      finalArticle = await reviseWithCritique(finalArticle, notes)
+      publishedReview = await grokReview(finalArticle, cluster)
+      validation = await claudeFinalValidation(finalArticle, publishedReview)
+      console.log(`   After retry: approved=${validation.approved}, confidence=${validation.confidenceScore}/10`)
+    }
+  }
 
   return {
     clusterId: cluster.clusterId,
