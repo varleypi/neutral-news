@@ -1,9 +1,13 @@
 name: Daily Article Generation
 
-# Runs at 08:00 EST (13:00 UTC) — after SpinDetector pipeline completes at ~07:00 EST
+# Primary trigger: SpinDetector's pipeline fires a repository_dispatch the moment
+# it finishes populating today's clusters (event type: spindetector-updated).
+# The daily schedule below is a backup in case that chained trigger is missed.
 on:
+  repository_dispatch:
+    types: [spindetector-updated]
   schedule:
-    - cron: '0 13 * * *'
+    - cron: '0 13 * * *'   # backup — SpinDetector normally triggers us ~3h earlier
   workflow_dispatch:
     inputs:
       pipeline_date:
