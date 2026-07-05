@@ -54,6 +54,24 @@ export async function getArticle(id: number): Promise<NeutralArticle | null> {
   return data as NeutralArticle
 }
 
+export async function getRecentArticles(limit = 20): Promise<NeutralArticle[]> {
+  if (isDemoMode) return MOCK_ARTICLES
+
+  const supabase = getClient()
+  const { data, error } = await supabase
+    .from('neutral_articles')
+    .select('*')
+    .eq('validation_approved', true)
+    .order('published_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error(`Failed to fetch recent articles: ${error.message}`)
+    return []
+  }
+  return (data ?? []) as NeutralArticle[]
+}
+
 export async function getLatestDate(): Promise<string> {
   if (isDemoMode) return '2026-06-03'
 
