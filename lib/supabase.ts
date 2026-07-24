@@ -54,6 +54,14 @@ export async function getArticle(id: number): Promise<NeutralArticle | null> {
   return data as NeutralArticle
 }
 
+/**
+ * Latest articles for the RSS feed.
+ *
+ * Duplicates are excluded for the same reason they are kept out of the sitemap:
+ * their pages declare a different URL as canonical, so advertising them to feed
+ * readers — Spin Detector among them — would push subscribers to a page that
+ * points somewhere else.
+ */
 export async function getRecentArticles(limit = 20): Promise<NeutralArticle[]> {
   if (isDemoMode) return MOCK_ARTICLES
 
@@ -62,6 +70,7 @@ export async function getRecentArticles(limit = 20): Promise<NeutralArticle[]> {
     .from('neutral_articles')
     .select('*')
     .eq('validation_approved', true)
+    .is('canonical_article_id', null)
     .order('published_at', { ascending: false })
     .limit(limit)
 
