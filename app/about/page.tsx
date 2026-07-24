@@ -1,10 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { canonical } from '@/lib/site'
 
 export const metadata: Metadata = {
   title: 'About & Methodology — Neutral News',
   description:
     'How Neutral News selects, writes, fact-checks, and validates five neutral news stories every day using a dual-AI editorial pipeline.',
+  alternates: { canonical: canonical('/about') },
 }
 
 const PIPELINE_STEPS = [

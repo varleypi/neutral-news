@@ -1,10 +1,11 @@
 import { getRecentArticles } from '@/lib/supabase'
+import { SITE_URL } from '@/lib/site'
 
 // Served at /rss.xml. Consumed by Spin Detector (and any reader) to pull the
 // latest neutral summaries. Regenerated hourly.
 export const revalidate = 3600
 
-const BASE = 'https://www.neutralnews.us'
+const BASE = SITE_URL
 
 function esc(s: string): string {
   return String(s ?? '')

@@ -7,7 +7,9 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "pipeline": "node pipeline/run.js"
+    "test": "node --test \"pipeline/**/*.test.js\"",
+    "pipeline": "node pipeline/run.js",
+    "backfill-canonicals": "node pipeline/backfill-canonicals.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

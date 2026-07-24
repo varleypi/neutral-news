@@ -18,6 +18,23 @@ function getSupabase() {
 async function storeArticles({ articles, date, elapsedSeconds }) {
   const supabase = getSupabase()
 
+  // Every candidate may have been a continuing story refreshed in place, which
+  // leaves no new rows for today. Pruning on an empty cluster list would build
+  // an `in ()` filter and wipe the day, so log the run and stop here.
+  if (articles.length === 0) {
+    console.log('   No new articles for this date — nothing to store or prune')
+    const { error: emptyRunError } = await supabase
+      .from('neutral_pipeline_runs')
+      .insert({
+        date,
+        articles_generated: 0,
+        elapsed_seconds: Math.round(elapsedSeconds),
+        status: 'success',
+      })
+    if (emptyRunError) console.warn(`   ⚠ Failed to log run: ${emptyRunError.message}`)
+    return
+  }
+
   // Upsert articles (idempotent on date + cluster_id)
   const rows = articles.map(a => ({
     date,
@@ -75,6 +92,57 @@ async function storeArticles({ articles, date, elapsedSeconds }) {
   if (runError) console.warn(`   ⚠ Failed to log run: ${runError.message}`)
 }
 
+/**
+ * Refresh a continuing story in place, at its original URL.
+ *
+ * Used when a candidate turns out to be a story we already published within the
+ * lookback window AND the new draft carries genuinely new information. Keeping
+ * the original `id` — and therefore the original `/article/{id}` URL and its
+ * accumulated search authority — is the whole point: the alternative is a second
+ * near-identical page competing with the first.
+ *
+ * `date` and `published_at` deliberately keep their original values so the
+ * article stays in the archive edition where it first ran; `last_updated_at`
+ * records the refresh.
+ */
+async function updateArticleInPlace({ articleId, result }) {
+  const supabase = getSupabase()
+
+  const { data: existing, error: readError } = await supabase
+    .from('neutral_articles')
+    .select('update_count')
+    .eq('id', articleId)
+    .single()
+
+  if (readError) throw new Error(`Failed to read article ${articleId}: ${readError.message}`)
+
+  const { error } = await supabase
+    .from('neutral_articles')
+    .update({
+      topic_label: result.topicLabel,
+      headline: result.article.headline,
+      summary: result.article.summary,
+      body: result.article.body,
+      key_facts: result.article.keyFacts,
+      references: result.article.references ?? [],
+      outlet_count: result.outletCount,
+      sources_used: result.article.sourcesUsed,
+      grok_review_score: result.grokReview?.overallScore ?? null,
+      grok_review_issues: result.grokReview?.issues ?? [],
+      grok_reviewer: result.grokReview?.reviewer ?? null,
+      validation_approved: result.validation?.approved ?? false,
+      validation_confidence: result.validation?.confidenceScore ?? null,
+      validation_neutrality: result.validation?.neutralityRating ?? null,
+      validation_notes: result.validation?.validationNotes ?? null,
+      validation_reviewed_at: result.validation?.reviewedAt ?? null,
+      last_updated_at: new Date().toISOString(),
+      update_count: (existing?.update_count ?? 0) + 1,
+    })
+    .eq('id', articleId)
+
+  if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`)
+}
+
 async function logError(date, message) {
   try {
     const supabase = getSupabase()
@@ -89,4 +157,4 @@ async function logError(date, message) {
   }
 }
 
-module.exports = { storeArticles, logError }
+module.exports = { storeArticles, updateArticleInPlace, logError }

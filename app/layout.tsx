@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import Link from 'next/link'
 import { Inter, Lora } from 'next/font/google'
+import { SITE_URL, canonical } from '@/lib/site'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
@@ -12,15 +13,27 @@ const lora = Lora({ subsets: ['latin'], variable: '--font-lora' })
 const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT || 'ca-pub-9164130388115843'
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://neutralnews.us'),
+  // www, not the apex — the apex 308-redirects here, so canonicals built from
+  // this base must not point at a URL that redirects.
+  metadataBase: new URL(SITE_URL),
   title: 'Neutral News — Factual. Verified. Unbiased.',
   description:
     "Five of today's top stories, written to the highest standards of factual accuracy and political neutrality. Independently reviewed by Claude and Grok.",
+  // Default canonical. Every page with its own URL overrides this in its own
+  // metadata; without a canonical anywhere, apex/www and duplicate paths all
+  // look like separate pages to a crawler.
+  alternates: { canonical: canonical('/') },
   openGraph: {
     title: 'Neutral News',
     description: 'Five top stories. Zero spin.',
     type: 'website',
-    url: 'https://neutralnews.us',
+    url: SITE_URL,
+    siteName: 'Neutral News',
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true, 'max-snippet': -1, 'max-image-preview': 'large' },
   },
   // AdSense site-verification tag
   other: {
@@ -66,6 +79,9 @@ function Masthead() {
           <Link href="/" className="py-3 text-slate-600 hover:text-slate-900 transition-colors">
             Today
           </Link>
+          <Link href="/archive" className="py-3 text-slate-600 hover:text-slate-900 transition-colors">
+            Archive
+          </Link>
           <Link href="/about" className="py-3 text-slate-600 hover:text-slate-900 transition-colors">
             About &amp; Methodology
           </Link>
@@ -104,7 +120,16 @@ function Footer() {
                 <Link href="/" className="hover:text-slate-800 transition-colors">Today&apos;s stories</Link>
               </li>
               <li>
+                <Link href="/archive" className="hover:text-slate-800 transition-colors">Archive</Link>
+              </li>
+              <li>
                 <Link href="/about" className="hover:text-slate-800 transition-colors">About &amp; methodology</Link>
+              </li>
+              <li>
+                <Link href="/privacy" className="hover:text-slate-800 transition-colors">Privacy policy</Link>
+              </li>
+              <li>
+                <a href="/rss.xml" className="hover:text-slate-800 transition-colors">RSS feed</a>
               </li>
               <li>
                 <a

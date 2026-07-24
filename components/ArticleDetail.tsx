@@ -21,6 +21,14 @@ export default function ArticleDetail({ article }: Props) {
     timeZoneName: 'short',
   })
 
+  const updatedStamp = article.last_updated_at
+    ? new Date(article.last_updated_at).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+    : null
+
   const paragraphs = article.body.split('\n\n').filter(Boolean)
 
   return (
@@ -34,6 +42,22 @@ export default function ArticleDetail({ article }: Props) {
         </svg>
         Today&apos;s news
       </Link>
+
+      {/* Published before the pipeline tracked continuing stories, so this page
+          covers the same event as an earlier one. It points readers (and, via
+          the canonical tag, crawlers) at the original. */}
+      {article.canonical_article_id && (
+        <div className="mb-6 px-4 py-3 border border-slate-200 rounded bg-slate-50 text-sm text-slate-600">
+          This story was also covered in an earlier edition.{' '}
+          <Link
+            href={`/article/${article.canonical_article_id}`}
+            className="font-medium text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-500"
+          >
+            Read the original report
+          </Link>
+          .
+        </div>
+      )}
 
       <div className="mb-2">
         <span className="text-[11px] uppercase tracking-widest text-slate-400 font-medium">
@@ -51,6 +75,9 @@ export default function ArticleDetail({ article }: Props) {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 mb-8 pb-6 border-b border-slate-200">
         <span>{publishedDate} · {publishedTime}</span>
+        {updatedStamp && (
+          <span className="text-slate-500">Updated {updatedStamp} as the story developed</span>
+        )}
         <span>{article.outlet_count} outlets reporting</span>
         <span className="uppercase">Sources: {article.sources_used.join(', ')}</span>
       </div>

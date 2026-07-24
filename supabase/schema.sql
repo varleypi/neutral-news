@@ -29,6 +29,13 @@ create table if not exists neutral_articles (
 
   published_at          timestamptz default now(),
 
+  -- Story continuity (see migrations/002_story_continuity.sql).
+  -- When set, this article duplicates an earlier one: its page emits a
+  -- canonical tag pointing there and it is left out of the sitemap.
+  canonical_article_id  bigint references neutral_articles (id),
+  last_updated_at       timestamptz,
+  update_count          int not null default 0,
+
   unique(date, cluster_id)
 );
 
@@ -64,3 +71,12 @@ create policy "Service role write neutral_pipeline_runs"
 -- Index for fast homepage query
 create index if not exists idx_neutral_articles_date
   on neutral_articles (date desc, outlet_count desc);
+
+-- Cross-day continuing-story lookup by cluster
+create index if not exists idx_neutral_articles_cluster_date
+  on neutral_articles (cluster_id, date desc);
+
+-- Duplicate filtering for the sitemap and archive
+create index if not exists idx_neutral_articles_canonical
+  on neutral_articles (canonical_article_id)
+  where canonical_article_id is not null;

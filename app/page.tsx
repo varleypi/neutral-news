@@ -1,8 +1,15 @@
+import type { Metadata } from 'next'
+import Link from 'next/link'
 import { getTodaysArticles, getLatestDate, isDemoMode } from '@/lib/supabase'
+import { canonical } from '@/lib/site'
 import ArticleCard from '@/components/ArticleCard'
 import AdSlot from '@/components/AdSlot'
 
 export const revalidate = 3600 // revalidate every hour
+
+export const metadata: Metadata = {
+  alternates: { canonical: canonical('/') },
+}
 
 export default async function HomePage() {
   const date = await getLatestDate()
@@ -46,13 +53,20 @@ export default async function HomePage() {
 
       <AdSlot slot="home-footer" format="horizontal" />
 
-      <div className="mt-12 pt-6 border-t border-slate-100 text-xs text-slate-400 leading-relaxed">
+      <div className="mt-12 pt-6 border-t border-slate-100 text-xs text-slate-400 leading-relaxed space-y-2">
         <p>
           Stories are selected by breadth of coverage across major outlets, written from verifiable
           facts only, independently fact-checked, and validated before publication.{' '}
-          <a href="/about" className="underline decoration-slate-300 underline-offset-2 hover:text-slate-600">
+          <Link href="/about" className="underline decoration-slate-300 underline-offset-2 hover:text-slate-600">
             Read our full methodology
-          </a>
+          </Link>
+          .
+        </p>
+        <p>
+          Looking for an earlier edition?{' '}
+          <Link href="/archive" className="underline decoration-slate-300 underline-offset-2 hover:text-slate-600">
+            Browse the full archive
+          </Link>
           .
         </p>
       </div>

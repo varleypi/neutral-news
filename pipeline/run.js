@@ -23,38 +23,24 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.loc
 const { selectTopClusters } = require('./select')
 const { writeDraft, reviseWithCritique } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
-const { storeArticles, logError } = require('./store')
+const { storeArticles, updateArticleInPlace, logError } = require('./store')
+const {
+  getRecentlyPublished,
+  findPriorCoverage,
+  hasMaterialDevelopment,
+  significantWords,
+  jaccard,
+  LOOKBACK_DAYS,
+} = require('./history')
 
 const REQUIRED_ENV = ['ANTHROPIC_API_KEY', 'SPINDETECTOR_SUPABASE_URL', 'SPINDETECTOR_SUPABASE_SERVICE_KEY']
 const OPTIONAL_ENV = ['XAI_API_KEY', 'NEUTRAL_NEWS_SUPABASE_URL', 'NEUTRAL_NEWS_SUPABASE_SERVICE_KEY', 'VERCEL_DEPLOY_HOOK_URL']
 
-// ── Duplicate-story detection ────────────────────────────────────────────────
+// ── Duplicate-story detection (within a single edition) ──────────────────────
 // SpinDetector occasionally produces two clusters for the same real-world event.
 // We compare the significant words of a candidate's headline + topic against the
 // stories already published and skip anything that overlaps too heavily.
-
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'over', 'after',
-  'amid', 'says', 'said', 'will', 'draw', 'both', 'raise', 'raising', 'questions',
-  'new', 'plan', 'plans', 'move', 'moves', 'set', 'sets',
-])
-
-function significantWords(text) {
-  return (text || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 3 && !STOPWORDS.has(w))
-}
-
-function jaccard(a, b) {
-  const A = new Set(a)
-  const B = new Set(b)
-  if (A.size === 0 || B.size === 0) return 0
-  const intersection = [...A].filter(x => B.has(x)).length
-  const union = new Set([...A, ...B]).size
-  return intersection / union
-}
+// Cross-day duplication is handled separately, in ./history.
 
 // True if `candidate` covers the same event as any already-published story.
 function isDuplicateStory(candidateText, publishedTexts, threshold = 0.5) {
@@ -153,10 +139,18 @@ async function main() {
   // Stages 2–6: Work down the ranked pool, keeping only articles that pass the
   // strict validation gate, until we have 5 — backfilling with the next-ranked
   // story whenever one is rejected.
+  // Cross-day memory: what we already published in the last week. A story that
+  // leads the coverage for days must not become a new article — and a new URL —
+  // each morning.
+  console.log(`\n📚 Loading the last ${LOOKBACK_DAYS} days of published stories...`)
+  const recent = await getRecentlyPublished(date)
+  console.log(`   ${recent.length} recent article(s) to check against`)
+
   const TARGET = 5
   console.log(`\n✍️  Stages 2–6 — Publishing the top ${TARGET} stories that pass validation...`)
   const results = []
   const publishedTexts = [] // headline + topic of each published story, for dedup
+  const updatedInPlace = []
   let processed = 0
   for (const cluster of clusters) {
     if (results.length >= TARGET) break
@@ -169,12 +163,44 @@ async function main() {
       continue
     }
 
+    // Have we covered this story in the last week?
+    const priorCoverage = findPriorCoverage(cluster, recent)
+
     try {
       const result = await processCluster(cluster)
       if (!result.validation?.approved) {
         console.log(`   ✗ Rejected by validation — backfilling with next-ranked story`)
         continue
       }
+
+      if (priorCoverage) {
+        // A continuing story. Either it has moved on — in which case we refresh
+        // the ORIGINAL article at its existing URL — or it has not, and we
+        // publish something else instead. Either way we never mint a second URL
+        // for the same event.
+        const { prior, matchedOn } = priorCoverage
+        const { developed, score } = hasMaterialDevelopment(result.article, prior)
+        console.log(
+          `   ↻ Already covered on ${prior.date} (matched on ${matchedOn}); ` +
+          `similarity to that article ${score.toFixed(2)}`
+        )
+
+        if (!developed) {
+          console.log(`   ⎘ Nothing materially new since ${prior.date} — backfilling with next-ranked story`)
+          continue
+        }
+
+        try {
+          await updateArticleInPlace({ articleId: prior.id, result })
+          updatedInPlace.push({ id: prior.id, headline: result.article.headline, priorDate: prior.date })
+          console.log(`   ✓ Refreshed article ${prior.id} in place: "${result.article.headline}"`)
+        } catch (err) {
+          console.error(`   ⚠ In-place update of article ${prior.id} failed: ${err.message}`)
+        }
+        // Either way this does not occupy one of today's five slots.
+        continue
+      }
+
       // Final check on the finished headline — catches same-event stories the
       // topic labels didn't reveal.
       const candidateText = `${result.article.headline} ${result.topicLabel}`
@@ -195,7 +221,12 @@ async function main() {
     console.log(`   ⚠ Candidate pool exhausted after ${processed} clusters — publishing ${results.length} of ${TARGET}`)
   }
 
-  if (results.length === 0) {
+  if (updatedInPlace.length > 0) {
+    console.log(`\n   ${updatedInPlace.length} continuing story/stories refreshed at their existing URLs:`)
+    updatedInPlace.forEach(u => console.log(`     · article ${u.id} (first ran ${u.priorDate}) — "${u.headline}"`))
+  }
+
+  if (results.length === 0 && updatedInPlace.length === 0) {
     const msg = 'No clusters passed validation — no articles generated'
     console.error(`❌ ${msg}`)
     await logError(date, msg)
@@ -230,7 +261,10 @@ async function main() {
 
   const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1)
   console.log(`\n✅ Pipeline complete in ${totalElapsed}s`)
-  console.log(`   ${results.length} stories published (all passed the strict validation gate) from ${processed} candidates reviewed`)
+  console.log(`   ${results.length} new stories published (all passed the strict validation gate) from ${processed} candidates reviewed`)
+  if (updatedInPlace.length > 0) {
+    console.log(`   ${updatedInPlace.length} continuing story/stories refreshed in place rather than republished`)
+  }
 }
 
 main().catch(err => {
