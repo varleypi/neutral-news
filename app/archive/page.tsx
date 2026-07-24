@@ -47,8 +47,9 @@ export default async function ArchivePage() {
       <div className="mb-8 border-b border-slate-200 pb-3">
         <h1 className="font-serif text-2xl text-slate-900">Archive</h1>
         <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-          Every edition we have published — {totalArticles.toLocaleString()} stories across{' '}
-          {days.length.toLocaleString()} days. Each was written from the day&apos;s source coverage,
+          Every edition we have published — {totalArticles.toLocaleString()}{' '}
+          {totalArticles === 1 ? 'story' : 'stories'} across {days.length.toLocaleString()}{' '}
+          {days.length === 1 ? 'day' : 'days'}. Each was written from the day&apos;s source coverage,
           independently fact-checked, and validated before publication.
         </p>
       </div>
