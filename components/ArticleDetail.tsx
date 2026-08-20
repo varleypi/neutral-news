@@ -82,16 +82,8 @@ export default function ArticleDetail({ article }: Props) {
         <span className="uppercase">Sources: {article.sources_used.join(', ')}</span>
       </div>
 
-      <div className="mb-10">
-        {paragraphs.map((para, i) => (
-          <p key={i} className="font-serif text-slate-800 leading-[1.8] mb-5 text-[17px]">
-            {para}
-          </p>
-        ))}
-      </div>
-
       {article.key_facts.length > 0 && (
-        <div className="border border-slate-200 rounded p-5 bg-slate-50 mb-6">
+        <div className="border border-slate-200 rounded p-5 bg-slate-50 mb-8">
           <h3 className="text-[11px] uppercase tracking-widest text-slate-500 font-semibold mb-3">
             Key Facts
           </h3>
@@ -105,6 +97,14 @@ export default function ArticleDetail({ article }: Props) {
           </ul>
         </div>
       )}
+
+      <div className="mb-10">
+        {paragraphs.map((para, i) => (
+          <p key={i} className="font-serif text-slate-800 leading-[1.8] mb-5 text-[17px]">
+            {para}
+          </p>
+        ))}
+      </div>
 
       {article.references?.length > 0 && (
         <div className="mb-6">
