@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { getArchiveDays } from '@/lib/supabase'
-import { canonical } from '@/lib/site'
+import { alternatesFor } from '@/lib/site'
 
 export const revalidate = 3600
 
@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   title: 'Archive — Neutral News',
   description:
     'Every edition of Neutral News, by date. Five neutrally written, independently fact-checked top stories for each publishing day.',
-  alternates: { canonical: canonical('/archive') },
+  alternates: alternatesFor('/archive'),
 }
 
 function formatDate(date: string) {
