@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test \"pipeline/**/*.test.js\"",
+    "test": "node --test \"pipeline/**/*.test.js\" \"lib/**/*.test.ts\"",
     "pipeline": "node pipeline/run.js",
     "backfill-canonicals": "node pipeline/backfill-canonicals.js"
   },

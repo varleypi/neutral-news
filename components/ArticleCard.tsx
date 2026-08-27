@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { NeutralArticle } from '@/lib/types'
+import { articlePath } from '@/lib/slug'
 import ValidationBadge from './ValidationBadge'
 
 interface Props {
@@ -22,7 +23,7 @@ export default function ArticleCard({ article, rank }: Props) {
             </span>
           </div>
 
-          <Link href={`/article/${article.id}`} className="group">
+          <Link href={articlePath(article)} className="group">
             <h2 className="font-serif text-2xl text-slate-900 leading-snug group-hover:text-slate-600 transition-colors">
               {article.headline}
             </h2>

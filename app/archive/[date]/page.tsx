@@ -2,7 +2,9 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getArticlesByDate, getArchiveDays } from '@/lib/supabase'
-import { canonical } from '@/lib/site'
+import { alternatesFor } from '@/lib/site'
+import { breadcrumbSchema } from '@/lib/schema'
+import JsonLd from '@/components/JsonLd'
 import ArticleCard from '@/components/ArticleCard'
 
 export const revalidate = 3600
@@ -34,7 +36,7 @@ export async function generateMetadata({
   return {
     title: `${formatDate(date)} — Neutral News`,
     description: `The five most widely reported stories of ${formatDate(date)}, written neutrally and independently fact-checked.`,
-    alternates: { canonical: canonical(`/archive/${date}`) },
+    alternates: alternatesFor(`/archive/${date}`),
   }
 }
 
@@ -58,6 +60,13 @@ export default async function ArchiveDatePage({
 
   return (
     <div>
+      <JsonLd
+        data={breadcrumbSchema([
+          { name: 'Today', path: '/' },
+          { name: 'Archive', path: '/archive' },
+          { name: formatDate(date), path: `/archive/${date}` },
+        ])}
+      />
       <Link
         href="/archive"
         className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 transition-colors mb-8"

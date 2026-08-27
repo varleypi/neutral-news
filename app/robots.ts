@@ -17,7 +17,9 @@ export default function robots(): MetadataRoute.Robots {
       { userAgent: 'AdsBot-Google', allow: '/' },
       { userAgent: 'AdsBot-Google-Mobile', allow: '/' },
     ],
-    sitemap: `${SITE_URL}/sitemap.xml`,
+    // Both files: the general sitemap for the crawler, and the Google News
+    // sitemap of the last 48 hours for Google News.
+    sitemap: [`${SITE_URL}/sitemap.xml`, `${SITE_URL}/news-sitemap.xml`],
     host: SITE_URL,
   }
 }

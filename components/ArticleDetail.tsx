@@ -5,9 +5,16 @@ import AdSlot from './AdSlot'
 
 interface Props {
   article: NeutralArticle
+  /**
+   * Path of the earlier article this one duplicates, when it duplicates one.
+   * Resolved by the page, which has to load that article anyway to build the
+   * canonical tag — linking `/article/<id>` here would send readers through a
+   * redirect on every click.
+   */
+  originalPath?: string | null
 }
 
-export default function ArticleDetail({ article }: Props) {
+export default function ArticleDetail({ article, originalPath }: Props) {
   const publishedDate = new Date(article.published_at).toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
@@ -46,11 +53,11 @@ export default function ArticleDetail({ article }: Props) {
       {/* Published before the pipeline tracked continuing stories, so this page
           covers the same event as an earlier one. It points readers (and, via
           the canonical tag, crawlers) at the original. */}
-      {article.canonical_article_id && (
+      {originalPath && (
         <div className="mb-6 px-4 py-3 border border-slate-200 rounded bg-slate-50 text-sm text-slate-600">
           This story was also covered in an earlier edition.{' '}
           <Link
-            href={`/article/${article.canonical_article_id}`}
+            href={originalPath}
             className="font-medium text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-500"
           >
             Read the original report
