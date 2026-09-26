@@ -143,6 +143,16 @@ async function updateArticleInPlace({ articleId, result }) {
   if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`)
 }
 
+async function hasSuccessfulRun(date) {
+  const { count, error } = await getSupabase()
+    .from('neutral_pipeline_runs')
+    .select('*', { count: 'exact', head: true })
+    .eq('date', date)
+    .eq('status', 'success')
+  if (error) throw new Error(`checking earlier runs for ${date} failed: ${error.message}`)
+  return count > 0
+}
+
 async function logError(date, message) {
   try {
     const supabase = getSupabase()
@@ -157,4 +167,4 @@ async function logError(date, message) {
   }
 }
 
-module.exports = { storeArticles, updateArticleInPlace, logError }
+module.exports = { storeArticles, updateArticleInPlace, logError, hasSuccessfulRun }

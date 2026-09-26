@@ -39,4 +39,6 @@ jobs:
           NEUTRAL_NEWS_SUPABASE_SERVICE_KEY: ${{ secrets.NEUTRAL_NEWS_SUPABASE_SERVICE_KEY }}
           VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
           PIPELINE_DATE: ${{ github.event.inputs.pipeline_date || '' }}
+          # Manual runs always regenerate; automatic triggers skip a date that already has an edition.
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: node pipeline/run.js
