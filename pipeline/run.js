@@ -23,7 +23,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.loc
 const { selectTopClusters } = require('./select')
 const { writeDraft, reviseWithCritique } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
-const { storeArticles, updateArticleInPlace, logError } = require('./store')
+const { storeArticles, updateArticleInPlace, logError, hasSuccessfulRun } = require('./store')
 const {
   getRecentlyPublished,
   findPriorCoverage,
@@ -124,6 +124,21 @@ async function main() {
   const date = process.env.PIPELINE_DATE || new Date().toISOString().split('T')[0]
   console.log(`📅 Date: ${date}`)
   const startTime = Date.now()
+
+  // The dispatch from SpinDetector and the backup cron can both fire on the same
+  // day; each full run costs dozens of Claude calls, so only the first one works.
+  if (process.env.FORCE_RUN !== 'true') {
+    let alreadyRan = false
+    try {
+      alreadyRan = await hasSuccessfulRun(date)
+    } catch (err) {
+      console.warn(`   ⚠ ${err.message} — running anyway`)
+    }
+    if (alreadyRan) {
+      console.log(`\n⏭  The ${date} edition was already generated — skipping (set FORCE_RUN=true to regenerate)`)
+      return
+    }
+  }
 
   // Stage 1: Select a ranked pool of candidate clusters
   console.log('\n🔍 Stage 1 — Selecting candidate story clusters from SpinDetector...')

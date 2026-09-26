@@ -7,9 +7,7 @@
  *   standards and returns a structured validation record stored with the article.
  */
 
-const Anthropic = require('@anthropic-ai/sdk')
-
-const claudeClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const { complete } = require('./claude')
 
 const GROK_REVIEW_SYSTEM = `You are a rigorous fact-checker and neutrality auditor for a wire news service.
 Your job is to find any factual claims that cannot be verified from the source headlines,
@@ -117,14 +115,7 @@ RESPOND WITH JSON:
   "passesReview": true
 }`
 
-  const response = await claudeClient.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 1000,
-    system: CLAUDE_VALIDATION_SYSTEM,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  const text = response.content[0]?.text ?? ''
+  const text = await complete({ system: CLAUDE_VALIDATION_SYSTEM, prompt, maxTokens: 1000 })
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return { overallScore: 7.0, issues: [], critiqueText: '', passesReview: true, reviewer: 'claude-fallback' }
   return { ...JSON.parse(jsonMatch[0]), reviewer: 'claude-fallback' }
@@ -189,14 +180,7 @@ RESPOND WITH JSON ONLY:
   "reviewedAt": "${new Date().toISOString()}"
 }`
 
-  const response = await claudeClient.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 800,
-    system: CLAUDE_VALIDATION_SYSTEM,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  const raw = response.content[0]?.text ?? ''
+  const raw = await complete({ system: CLAUDE_VALIDATION_SYSTEM, prompt, maxTokens: 800 })
   const stripped = raw.replace(/```(?:json)?/g, '').trim()
   const jsonMatch = stripped.match(/\{[\s\S]*\}/)
   if (!jsonMatch) {

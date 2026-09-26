@@ -6,9 +6,7 @@
  * Called twice: initial draft, then a revision pass incorporating Grok's critique.
  */
 
-const Anthropic = require('@anthropic-ai/sdk')
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const { complete } = require('./claude')
 
 const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
 voice blends three sensibilities:
@@ -108,14 +106,7 @@ Apply all corrections and respond with JSON only (same schema as before):
 
 async function writeDraft(cluster) {
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
-  const response = await client.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 3000,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildDraftPrompt(cluster) }],
-  })
-
-  const text = response.content[0]?.text ?? ''
+  const text = await complete({ system: SYSTEM_PROMPT, prompt: buildDraftPrompt(cluster), maxTokens: 3000 })
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error(`No JSON in Claude draft response`)
 
@@ -126,14 +117,7 @@ async function writeDraft(cluster) {
 
 async function reviseWithCritique(draft, critique) {
   console.log(`   Revising article based on fact-check critique...`)
-  const response = await client.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 3000,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildRevisionPrompt(draft, critique) }],
-  })
-
-  const text = response.content[0]?.text ?? ''
+  const text = await complete({ system: SYSTEM_PROMPT, prompt: buildRevisionPrompt(draft, critique), maxTokens: 3000 })
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error(`No JSON in Claude revision response`)
 
