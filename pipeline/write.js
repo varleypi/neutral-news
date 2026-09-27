@@ -6,7 +6,7 @@
  * Called twice: initial draft, then a revision pass incorporating Grok's critique.
  */
 
-const { complete } = require('./claude')
+const { complete, ARTICLE_SCHEMA } = require('./claude')
 
 const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
 voice blends three sensibilities:
@@ -106,7 +106,7 @@ Apply all corrections and respond with JSON only (same schema as before):
 
 async function writeDraft(cluster) {
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
-  const text = await complete({ system: SYSTEM_PROMPT, prompt: buildDraftPrompt(cluster), maxTokens: 3000 })
+  const text = await complete({ system: SYSTEM_PROMPT, prompt: buildDraftPrompt(cluster), maxTokens: 3000, schema: ARTICLE_SCHEMA })
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error(`No JSON in Claude draft response`)
 
@@ -117,7 +117,7 @@ async function writeDraft(cluster) {
 
 async function reviseWithCritique(draft, critique) {
   console.log(`   Revising article based on fact-check critique...`)
-  const text = await complete({ system: SYSTEM_PROMPT, prompt: buildRevisionPrompt(draft, critique), maxTokens: 3000 })
+  const text = await complete({ system: SYSTEM_PROMPT, prompt: buildRevisionPrompt(draft, critique), maxTokens: 3000, schema: ARTICLE_SCHEMA })
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error(`No JSON in Claude revision response`)
 

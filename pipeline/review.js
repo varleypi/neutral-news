@@ -7,7 +7,7 @@
  *   standards and returns a structured validation record stored with the article.
  */
 
-const { complete } = require('./claude')
+const { complete, VALIDATOR_MODEL, REVIEW_SCHEMA, VALIDATION_SCHEMA } = require('./claude')
 
 const GROK_REVIEW_SYSTEM = `You are a rigorous fact-checker and neutrality auditor for a wire news service.
 Your job is to find any factual claims that cannot be verified from the source headlines,
@@ -115,7 +115,7 @@ RESPOND WITH JSON:
   "passesReview": true
 }`
 
-  const text = await complete({ system: CLAUDE_VALIDATION_SYSTEM, prompt, maxTokens: 1000 })
+  const text = await complete({ system: CLAUDE_VALIDATION_SYSTEM, prompt, maxTokens: 1000, schema: REVIEW_SCHEMA })
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return { overallScore: 7.0, issues: [], critiqueText: '', passesReview: true, reviewer: 'claude-fallback' }
   return { ...JSON.parse(jsonMatch[0]), reviewer: 'claude-fallback' }
@@ -180,7 +180,7 @@ RESPOND WITH JSON ONLY:
   "reviewedAt": "${new Date().toISOString()}"
 }`
 
-  const raw = await complete({ system: CLAUDE_VALIDATION_SYSTEM, prompt, maxTokens: 800 })
+  const raw = await complete({ model: VALIDATOR_MODEL, system: CLAUDE_VALIDATION_SYSTEM, prompt, maxTokens: 800, schema: VALIDATION_SCHEMA })
   const stripped = raw.replace(/```(?:json)?/g, '').trim()
   const jsonMatch = stripped.match(/\{[\s\S]*\}/)
   if (!jsonMatch) {
