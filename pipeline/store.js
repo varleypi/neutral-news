@@ -55,6 +55,13 @@ async function storeArticles({ articles, date, elapsedSeconds }) {
     validation_neutrality: a.validation?.neutralityRating ?? null,
     validation_notes: a.validation?.validationNotes ?? null,
     validation_reviewed_at: a.validation?.reviewedAt ?? null,
+    required_issue_dispositions: a.validation?.requiredIssueDispositions ?? [],
+    verification_status: a.verification?.status ?? null,
+    verification_claims: a.verification?.claims ?? [],
+    verification_sources: a.verification?.sourcesRetrieved ?? [],
+    research_sources: a.article.researchSources ?? [],
+    gate_passed: a.gate?.passed ?? null,
+    gate_blockers: a.gate?.blockers ?? [],
     published_at: new Date().toISOString(),
   }))
 
@@ -135,6 +142,13 @@ async function updateArticleInPlace({ articleId, result }) {
       validation_neutrality: result.validation?.neutralityRating ?? null,
       validation_notes: result.validation?.validationNotes ?? null,
       validation_reviewed_at: result.validation?.reviewedAt ?? null,
+      required_issue_dispositions: result.validation?.requiredIssueDispositions ?? [],
+      verification_status: result.verification?.status ?? null,
+      verification_claims: result.verification?.claims ?? [],
+      verification_sources: result.verification?.sourcesRetrieved ?? [],
+      research_sources: result.article.researchSources ?? [],
+      gate_passed: result.gate?.passed ?? null,
+      gate_blockers: result.gate?.blockers ?? [],
       last_updated_at: new Date().toISOString(),
       update_count: (existing?.update_count ?? 0) + 1,
     })

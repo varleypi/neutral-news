@@ -3,13 +3,16 @@
  *
  * Stages:
  *   1. Select a ranked pool of candidate clusters from SpinDetector (by coverage)
- *   2. Claude drafts a neutral, factual article for a cluster
+ *   2. Claude drafts a neutral, factual article for a cluster, with web search
  *   3. Grok reviews for factual accuracy and neutrality → returns critique
- *   4. Claude revises the article; Grok re-scores the revised version
- *   5. Claude performs final validation sign-off
- *   6. If validation fails, revise once more and re-validate
- *   7. Work down the pool until 5 stories pass the strict gate; store them
- *   8. Trigger a Vercel redeploy so the new edition goes live
+ *  3b. Claude verifies the article's standalone claims against live sources
+ *   4. Claude revises the article; the review and verification are re-run
+ *   5. Claude performs final validation and accounts for each required issue
+ *   6. ./gate.js decides — in code — whether the article may publish
+ *   7. If the gate blocks, revise once more against the blockers and re-check
+ *   8. Work down the pool until 5 stories pass the gate; store them
+ *   9. Trigger a Vercel redeploy so the new edition goes live
+ *  10. Post the edition to X as a thread (optional, gated on X_* env vars)
  *
  * Usage:
  *   node pipeline/run.js                           # today's date
@@ -23,7 +26,10 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.loc
 const { selectTopClusters } = require('./select')
 const { writeDraft, reviseWithCritique } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
+const { verifyClaims, verificationIssues } = require('./verify')
+const { evaluateGate, describeBlockers } = require('./gate')
 const { storeArticles, updateArticleInPlace, logError } = require('./store')
+const { postDailyThread } = require('./social')
 const {
   getRecentlyPublished,
   findPriorCoverage,
@@ -33,8 +39,26 @@ const {
   LOOKBACK_DAYS,
 } = require('./history')
 
+// ── Pilot / dry-run controls ────────────────────────────────────────────────
+// PIPELINE_DRY_RUN=1      run everything, write nothing, publish nothing
+// PIPELINE_MAX_CLUSTERS=N stop after N candidates (keeps a pilot cheap)
+const DRY_RUN = ['1', 'true', 'yes'].includes(String(process.env.PIPELINE_DRY_RUN ?? '').toLowerCase())
+const MAX_CLUSTERS = Number(process.env.PIPELINE_MAX_CLUSTERS) || Infinity
+
+// What a dry run saw, in the order it saw it — printed as a report at the end.
+const dryRunReport = []
+
 const REQUIRED_ENV = ['ANTHROPIC_API_KEY', 'SPINDETECTOR_SUPABASE_URL', 'SPINDETECTOR_SUPABASE_SERVICE_KEY']
-const OPTIONAL_ENV = ['XAI_API_KEY', 'NEUTRAL_NEWS_SUPABASE_URL', 'NEUTRAL_NEWS_SUPABASE_SERVICE_KEY', 'VERCEL_DEPLOY_HOOK_URL']
+const OPTIONAL_ENV = [
+  'XAI_API_KEY',
+  'NEUTRAL_NEWS_SUPABASE_URL',
+  'NEUTRAL_NEWS_SUPABASE_SERVICE_KEY',
+  'VERCEL_DEPLOY_HOOK_URL',
+  'X_API_KEY',
+  'X_API_SECRET',
+  'X_ACCESS_TOKEN',
+  'X_ACCESS_SECRET',
+]
 
 // ── Duplicate-story detection (within a single edition) ──────────────────────
 // SpinDetector occasionally produces two clusters for the same real-world event.
@@ -48,62 +72,178 @@ function isDuplicateStory(candidateText, publishedTexts, threshold = 0.5) {
   return publishedTexts.some(t => jaccard(cand, significantWords(t)) >= threshold)
 }
 
-async function processCluster(cluster) {
+/**
+ * Everything the fact-checker and the verifier want changed, as one critique.
+ *
+ * The writer sees a single list. Keeping the verifier's findings separate would
+ * invite the revision to treat them as a lesser class of note, which is the
+ * habit that let a required correction survive into publication in the first
+ * place.
+ */
+function buildCritique(review, verification) {
+  const parts = []
+  if (review.critiqueText) parts.push(review.critiqueText)
+
+  const unverified = verificationIssues(verification)
+  if (unverified.length > 0) {
+    parts.push(
+      'CLAIMS THAT COULD NOT BE CONFIRMED AGAINST CURRENT SOURCES (each must be removed or sourced):\n' +
+      unverified.map(i => `- "${i.excerpt}" — ${i.correction}`).join('\n')
+    )
+  }
+
+  const contradicted = (verification?.claims ?? []).filter(c => c.verdict === 'CONTRADICTED')
+  if (contradicted.length > 0) {
+    parts.push(
+      'CLAIMS CURRENT SOURCES CONTRADICT (these are factually wrong and must be corrected or cut):\n' +
+      contradicted.map(c => `- "${c.excerpt}" — ${c.evidence}${c.sources?.length ? ` (${c.sources.join(', ')})` : ''}`).join('\n')
+    )
+  }
+
+  return parts.join('\n\n')
+}
+
+/** Review and verify in parallel — neither depends on the other's output. */
+async function checkArticle(article, cluster, date) {
+  const [review, verification] = await Promise.all([
+    grokReview(article, cluster, { date }),
+    verifyClaims(article, cluster, { date }),
+  ])
+  // The verifier's unconfirmed claims join the required-issue queue, so the gate
+  // holds them to the same standard as anything the fact-checker raised.
+  const issues = [...(review.issues ?? []), ...verificationIssues(verification)]
+  return { review: { ...review, issues }, verification }
+}
+
+async function processCluster(cluster, date) {
   console.log(`\n  📰 "${cluster.topicLabel}" (${cluster.outletCount} outlets)`)
 
-  // Step 2: Initial draft
-  const draft = await writeDraft(cluster)
+  // Step 2: Initial draft, researched rather than recalled
+  let article = await writeDraft(cluster, { date })
 
-  // Step 3: Grok review
-  console.log(`   Running Grok fact-check...`)
-  const review = await grokReview(draft, cluster)
+  // Steps 3 & 3b: fact-check and claim verification
+  console.log(`   Running fact-check and claim verification...`)
+  let { review, verification } = await checkArticle(article, cluster, date)
 
-  let finalArticle = draft
-
-  // Step 4: Revise if issues found
-  let publishedReview = review
-  if (review.issues?.length > 0 && review.critiqueText) {
-    finalArticle = await reviseWithCritique(draft, review.critiqueText)
-
-    // Re-score the REVISED article so the published Grok score reflects what
-    // readers actually see — not the pre-revision draft.
-    console.log(`   Re-scoring revised article with Grok...`)
-    const rescored = await grokReview(finalArticle, cluster)
-    console.log(`   Grok score after revision: ${rescored.overallScore}/10 (was ${review.overallScore}/10)`)
-    publishedReview = rescored
+  // Step 4: Revise if anything was raised, then re-check what readers will see
+  if (review.issues?.length > 0) {
+    article = await reviseWithCritique(article, buildCritique(review, verification), { date })
+    console.log(`   Re-checking revised article...`)
+    const rechecked = await checkArticle(article, cluster, date)
+    console.log(`   Score after revision: ${rechecked.review.overallScore}/10 (was ${review.overallScore}/10)`)
+    review = rechecked.review
+    verification = rechecked.verification
   } else {
     console.log(`   No issues found — skipping revision`)
   }
 
-  // Step 5: Claude final validation
+  // Step 5: Final validation — which now reports rather than decides
   console.log(`   Running Claude final validation...`)
-  let validation = await claudeFinalValidation(finalArticle, publishedReview)
+  let validation = await claudeFinalValidation(article, review, { verification, date })
 
-  // Step 6: If validation fails, revise once more using its feedback, then
-  // re-validate — rather than discarding the article outright.
-  if (!validation.approved) {
-    const notes = [
-      validation.validationNotes,
-      ...(validation.remainingIssues ?? []),
-    ].filter(Boolean).join('\n')
+  // Step 6: The gate. Code, not prose, decides from here.
+  let gate = evaluateGate({ article, review, validation, verification })
 
-    if (notes) {
-      console.log(`   Validation flagged the article — revising once more and re-validating...`)
-      finalArticle = await reviseWithCritique(finalArticle, notes)
-      publishedReview = await grokReview(finalArticle, cluster)
-      validation = await claudeFinalValidation(finalArticle, publishedReview)
-      console.log(`   After retry: approved=${validation.approved}, confidence=${validation.confidenceScore}/10`)
-    }
+  // Step 7: One more attempt, against the blockers themselves. A story that
+  // fails twice is dropped and the next-ranked candidate takes its slot.
+  if (!gate.passed) {
+    console.log(`   Gate blocked the article:`)
+    describeBlockers(gate.blockers).forEach(b => console.log(`     · ${b}`))
+    console.log(`   Revising once more against the blockers...`)
+
+    const blockerNotes = [
+      'The following problems must be fixed before this article can be published.',
+      'Each is required: remove the text, or correct it and cite a source in the references.',
+      '',
+      ...describeBlockers(gate.blockers).map(b => `- ${b}`),
+      '',
+      buildCritique(review, verification),
+    ].join('\n')
+
+    article = await reviseWithCritique(article, blockerNotes, { date })
+    const rechecked = await checkArticle(article, cluster, date)
+    review = rechecked.review
+    verification = rechecked.verification
+    validation = await claudeFinalValidation(article, review, { verification, date })
+    gate = evaluateGate({ article, review, validation, verification })
+    console.log(`   After retry: gate ${gate.passed ? 'passed' : 'still blocked'}`)
+    if (!gate.passed) describeBlockers(gate.blockers).forEach(b => console.log(`     · ${b}`))
   }
 
   return {
     clusterId: cluster.clusterId,
     topicLabel: cluster.topicLabel,
     outletCount: cluster.outletCount,
-    article: finalArticle,
-    grokReview: publishedReview,
+    article,
+    grokReview: review,
     validation,
+    verification,
+    gate,
   }
+}
+
+/**
+ * The pilot report.
+ *
+ * The point of a dry run is to see the gate working, so this leads with the
+ * rejections and why they happened - which claims current sources contradicted,
+ * which required corrections went unresolved, and which waivers were offered
+ * with nothing behind them.
+ */
+function printDryRunReport(date, processed, elapsedSeconds) {
+  const rule = '-'.repeat(72)
+  console.log(`
+${'='.repeat(72)}`)
+  console.log(`DRY RUN REPORT - ${date} - ${processed} cluster(s) in ${elapsedSeconds.toFixed(1)}s`)
+  console.log('Nothing was stored, deployed or posted.')
+  console.log('='.repeat(72))
+
+  for (const entry of dryRunReport) {
+    const { outcome, result } = entry
+    const mark = outcome === 'rejected' ? 'x' : 'v'
+    console.log(`
+${rule}`)
+    console.log(`[${mark}] ${outcome.toUpperCase()} - "${result.article.headline}"`)
+    console.log(`   cluster: ${result.topicLabel} (${result.outletCount} outlets)`)
+
+    const v = result.verification ?? {}
+    console.log(`   verification: ${v.status ?? 'n/a'}` +
+      (v.sourcesRetrieved?.length ? ` - ${v.sourcesRetrieved.length} source(s) retrieved` : ''))
+    for (const c of v.claims ?? []) {
+      if (c.verdict === 'SUPPORTED') continue // the interesting ones are the others
+      console.log(`     [${c.verdict}] ${c.claim}`)
+      if (c.evidence) console.log(`        -> ${c.evidence}`)
+      if (c.sources?.length) console.log(`        -> ${c.sources.join(', ')}`)
+    }
+
+    const required = (result.grokReview?.issues ?? []).filter(i => i.severity === 'required')
+    if (required.length > 0) {
+      console.log(`   required issues raised: ${required.length}`)
+      for (const i of required) console.log(`     [${i.type}] "${truncate(i.excerpt, 110)}"`)
+    }
+
+    for (const d of result.validation?.requiredIssueDispositions ?? []) {
+      console.log(`   disposition: ${d.disposition} (${d.evidenceType ?? 'none'})` +
+        (d.evidenceRef ? ` -> ${truncate(d.evidenceRef, 80)}` : ''))
+    }
+
+    console.log(`   gate: ${result.gate?.passed ? 'PASSED' : 'BLOCKED'}`)
+    for (const b of describeBlockers(result.gate?.blockers ?? [])) {
+      console.log(`     . ${b}`)
+    }
+  }
+
+  const wouldPublish = dryRunReport.filter(e => e.outcome !== 'rejected').length
+  const rejected = dryRunReport.filter(e => e.outcome === 'rejected').length
+  console.log(`
+${'='.repeat(72)}`)
+  console.log(`   ${wouldPublish} would publish, ${rejected} blocked by the gate, out of ${processed} candidate(s)`)
+  console.log('='.repeat(72))
+}
+
+function truncate(text, n) {
+  const t = String(text ?? '')
+  return t.length > n ? `${t.slice(0, n)}...` : t
 }
 
 async function main() {
@@ -123,6 +263,15 @@ async function main() {
 
   const date = process.env.PIPELINE_DATE || new Date().toISOString().split('T')[0]
   console.log(`📅 Date: ${date}`)
+
+  // A pilot has to be able to exercise the real clusters, the real models and
+  // the real gate without any of it reaching readers. In a dry run nothing is
+  // stored, no deploy is triggered and nothing is posted — the run prints what
+  // it would have published, and why each rejected story was rejected.
+  if (DRY_RUN) {
+    console.log('🧪 DRY RUN — nothing will be stored, deployed or posted')
+    if (Number.isFinite(MAX_CLUSTERS)) console.log(`   Processing at most ${MAX_CLUSTERS} cluster(s)`)
+  }
   const startTime = Date.now()
 
   // Stage 1: Select a ranked pool of candidate clusters
@@ -136,9 +285,9 @@ async function main() {
     process.exit(1)
   }
 
-  // Stages 2–6: Work down the ranked pool, keeping only articles that pass the
-  // strict validation gate, until we have 5 — backfilling with the next-ranked
-  // story whenever one is rejected.
+  // Stages 2–7: Work down the ranked pool, keeping only articles that clear the
+  // publication gate, until we have 5 — backfilling with the next-ranked story
+  // whenever one is rejected.
   // Cross-day memory: what we already published in the last week. A story that
   // leads the coverage for days must not become a new article — and a new URL —
   // each morning.
@@ -147,13 +296,21 @@ async function main() {
   console.log(`   ${recent.length} recent article(s) to check against`)
 
   const TARGET = 5
-  console.log(`\n✍️  Stages 2–6 — Publishing the top ${TARGET} stories that pass validation...`)
+  console.log(`\n✍️  Stages 2–7 — Publishing the top ${TARGET} stories that clear the gate...`)
   const results = []
   const publishedTexts = [] // headline + topic of each published story, for dedup
   const updatedInPlace = []
   let processed = 0
+  // Tells an article that genuinely failed its checks apart from a verifier outage.
+  const VERIFIER_FAILURE_LIMIT = 3
+  let consecutiveVerifierFailures = 0
   for (const cluster of clusters) {
     if (results.length >= TARGET) break
+    if (processed >= MAX_CLUSTERS) {
+      console.log(`
+   Reached the ${MAX_CLUSTERS}-cluster cap for this run`)
+      break
+    }
     processed++
 
     // Cheap pre-check: skip a cluster whose topic already matches a published
@@ -167,11 +324,31 @@ async function main() {
     const priorCoverage = findPriorCoverage(cluster, recent)
 
     try {
-      const result = await processCluster(cluster)
-      if (!result.validation?.approved) {
-        console.log(`   ✗ Rejected by validation — backfilling with next-ranked story`)
+      const result = await processCluster(cluster, date)
+      if (!result.gate?.passed) {
+        console.log(`   ✗ Rejected by the publication gate — backfilling with next-ranked story`)
+        if (DRY_RUN) dryRunReport.push({ outcome: 'rejected', result })
+
+        // Verification is a hard dependency now: an article whose claims could
+        // not be checked does not publish. That is the right default, but if the
+        // verifier itself is down, every remaining candidate will fail the same
+        // way — so stop rather than spending the whole pool proving it.
+        const onlyVerificationFailed =
+          result.gate.blockers.length > 0 &&
+          result.gate.blockers.every(b => b.kind === 'VERIFICATION_UNAVAILABLE')
+        consecutiveVerifierFailures = onlyVerificationFailed ? consecutiveVerifierFailures + 1 : 0
+
+        if (consecutiveVerifierFailures >= VERIFIER_FAILURE_LIMIT) {
+          const msg =
+            `Claim verification failed on ${consecutiveVerifierFailures} consecutive clusters — ` +
+            `aborting rather than publishing unverified articles`
+          console.error(`\n❌ ${msg}`)
+          await logError(date, msg)
+          process.exit(1)
+        }
         continue
       }
+      consecutiveVerifierFailures = 0
 
       if (priorCoverage) {
         // A continuing story. Either it has moved on — in which case we refresh
@@ -190,12 +367,17 @@ async function main() {
           continue
         }
 
-        try {
-          await updateArticleInPlace({ articleId: prior.id, result })
-          updatedInPlace.push({ id: prior.id, headline: result.article.headline, priorDate: prior.date })
-          console.log(`   ✓ Refreshed article ${prior.id} in place: "${result.article.headline}"`)
-        } catch (err) {
-          console.error(`   ⚠ In-place update of article ${prior.id} failed: ${err.message}`)
+        if (DRY_RUN) {
+          dryRunReport.push({ outcome: 'would refresh in place', priorId: prior.id, result })
+          console.log(`   ✓ [dry run] would refresh article ${prior.id} in place: "${result.article.headline}"`)
+        } else {
+          try {
+            await updateArticleInPlace({ articleId: prior.id, result })
+            updatedInPlace.push({ id: prior.id, headline: result.article.headline, priorDate: prior.date })
+            console.log(`   ✓ Refreshed article ${prior.id} in place: "${result.article.headline}"`)
+          } catch (err) {
+            console.error(`   ⚠ In-place update of article ${prior.id} failed: ${err.message}`)
+          }
         }
         // Either way this does not occupy one of today's five slots.
         continue
@@ -210,7 +392,12 @@ async function main() {
       }
       results.push(result)
       publishedTexts.push(candidateText)
-      console.log(`   ✓ Published ${results.length}/${TARGET}: "${result.article.headline}"`)
+      if (DRY_RUN) dryRunReport.push({ outcome: 'would publish', result })
+      console.log(
+        DRY_RUN
+          ? `   ✓ [dry run] would publish ${results.length}/${TARGET}: "${result.article.headline}"`
+          : `   ✓ Published ${results.length}/${TARGET}: "${result.article.headline}"`
+      )
     } catch (err) {
       console.error(`   ❌ Failed for "${cluster.topicLabel}": ${err.message} — backfilling`)
       // Continue with remaining clusters
@@ -226,11 +413,18 @@ async function main() {
     updatedInPlace.forEach(u => console.log(`     · article ${u.id} (first ran ${u.priorDate}) — "${u.headline}"`))
   }
 
-  if (results.length === 0 && updatedInPlace.length === 0) {
+  if (results.length === 0 && updatedInPlace.length === 0 && !DRY_RUN) {
     const msg = 'No clusters passed validation — no articles generated'
     console.error(`❌ ${msg}`)
     await logError(date, msg)
     process.exit(1)
+  }
+
+  // A dry run stops here: it has everything it set out to show, and the stages
+  // below are exactly the ones that must not run.
+  if (DRY_RUN) {
+    printDryRunReport(date, processed, (Date.now() - startTime) / 1000)
+    return
   }
 
   // Stage 7: Store
@@ -259,9 +453,19 @@ async function main() {
     console.log('\nℹ VERCEL_DEPLOY_HOOK_URL not set — site refreshes within the hour via ISR')
   }
 
+  // Stage 9: Announce the edition on X. Runs after the deploy hook so the links
+  // point at a site that is already rebuilding; the article route renders on
+  // demand anyway, so a link is never dead. Never fails the pipeline.
+  console.log('\n🐦 Stage 9 — Posting the edition to X...')
+  try {
+    await postDailyThread(date)
+  } catch (err) {
+    console.warn(`   ⚠ X post failed: ${err.message} — continuing`)
+  }
+
   const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1)
   console.log(`\n✅ Pipeline complete in ${totalElapsed}s`)
-  console.log(`   ${results.length} new stories published (all passed the strict validation gate) from ${processed} candidates reviewed`)
+  console.log(`   ${results.length} new stories published (all cleared the publication gate) from ${processed} candidates reviewed`)
   if (updatedInPlace.length > 0) {
     console.log(`   ${updatedInPlace.length} continuing story/stories refreshed in place rather than republished`)
   }

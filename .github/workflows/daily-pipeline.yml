@@ -13,6 +13,13 @@ on:
       pipeline_date:
         description: 'Date to run for (YYYY-MM-DD). Defaults to today.'
         required: false
+      dry_run:
+        description: 'Dry run: exercise the full pipeline but store, deploy and post nothing.'
+        type: boolean
+        default: false
+      max_clusters:
+        description: 'Stop after this many candidate clusters (blank = no cap). Keeps a pilot cheap.'
+        required: false
 
 jobs:
   generate-articles:
@@ -38,5 +45,16 @@ jobs:
           NEUTRAL_NEWS_SUPABASE_URL: ${{ secrets.NEUTRAL_NEWS_SUPABASE_URL }}
           NEUTRAL_NEWS_SUPABASE_SERVICE_KEY: ${{ secrets.NEUTRAL_NEWS_SUPABASE_SERVICE_KEY }}
           VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+          # OAuth 1.0a user tokens for the @NeutralNews X account's own developer
+          # app — separate credentials from SpinDetector's, so the two sites post
+          # from two different accounts.
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
           PIPELINE_DATE: ${{ github.event.inputs.pipeline_date || '' }}
+          # Both are only ever set by a manual dispatch; the scheduled and
+          # chained runs leave them empty and publish as normal.
+          PIPELINE_DRY_RUN: ${{ github.event.inputs.dry_run || '' }}
+          PIPELINE_MAX_CLUSTERS: ${{ github.event.inputs.max_clusters || '' }}
         run: node pipeline/run.js
