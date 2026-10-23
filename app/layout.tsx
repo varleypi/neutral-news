@@ -2,7 +2,17 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import Link from 'next/link'
 import { Inter, Lora } from 'next/font/google'
-import { SITE_URL, canonical } from '@/lib/site'
+import {
+  OG_IMAGE_PATH,
+  RSS_PATH,
+  SITE_DESCRIPTION,
+  SITE_NAME,
+  SITE_URL,
+  alternatesFor,
+  canonical,
+} from '@/lib/site'
+import { siteSchema } from '@/lib/schema'
+import JsonLd from '@/components/JsonLd'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
@@ -12,23 +22,38 @@ const lora = Lora({ subsets: ['latin'], variable: '--font-lora' })
 // AdSense site), so it's safe to keep in the repo. An env var overrides it.
 const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT || 'ca-pub-9164130388115843'
 
+const DEFAULT_OG_IMAGE = {
+  url: canonical(OG_IMAGE_PATH),
+  width: 1200,
+  height: 630,
+  alt: `${SITE_NAME} — factual, verified, unbiased`,
+}
+
 export const metadata: Metadata = {
   // www, not the apex — the apex 308-redirects here, so canonicals built from
   // this base must not point at a URL that redirects.
   metadataBase: new URL(SITE_URL),
-  title: 'Neutral News — Factual. Verified. Unbiased.',
-  description:
-    "Five of today's top stories, written to the highest standards of factual accuracy and political neutrality. Independently reviewed by Claude and Grok.",
-  // Default canonical. Every page with its own URL overrides this in its own
-  // metadata; without a canonical anywhere, apex/www and duplicate paths all
-  // look like separate pages to a crawler.
-  alternates: { canonical: canonical('/') },
+  title: `${SITE_NAME} — Factual. Verified. Unbiased.`,
+  description: SITE_DESCRIPTION,
+  // Default canonical, plus the RSS autodiscovery link every page carries so a
+  // reader pointed at any URL on the site finds the feed. Pages with their own
+  // URL override this with `alternatesFor(path)`; without a canonical anywhere,
+  // apex/www and duplicate paths all look like separate pages to a crawler.
+  alternates: alternatesFor('/'),
   openGraph: {
-    title: 'Neutral News',
+    title: SITE_NAME,
     description: 'Five top stories. Zero spin.',
     type: 'website',
     url: SITE_URL,
-    siteName: 'Neutral News',
+    siteName: SITE_NAME,
+    locale: 'en_US',
+    images: [DEFAULT_OG_IMAGE],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: SITE_NAME,
+    description: 'Five top stories. Zero spin.',
+    images: [DEFAULT_OG_IMAGE.url],
   },
   robots: {
     index: true,
@@ -129,7 +154,7 @@ function Footer() {
                 <Link href="/privacy" className="hover:text-slate-800 transition-colors">Privacy policy</Link>
               </li>
               <li>
-                <a href="/rss.xml" className="hover:text-slate-800 transition-colors">RSS feed</a>
+                <a href={RSS_PATH} className="hover:text-slate-800 transition-colors">RSS feed</a>
               </li>
               <li>
                 <a
@@ -179,6 +204,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${inter.variable} ${lora.variable}`}>
       <body className="bg-white text-slate-900 antialiased">
+        {/* Who publishes this site, and under what process. Emitted once here so
+            every page carries it, including the ones with no article schema. */}
+        <JsonLd data={siteSchema()} />
         {/* Loads the AdSense library so ads can serve. Site verification is
             handled by the google-adsense-account meta tag (in <head> via
             metadata) and /ads.txt — both crawlable in the raw HTML. */}

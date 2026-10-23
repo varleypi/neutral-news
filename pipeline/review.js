@@ -17,16 +17,16 @@
  */
 
 const {
-  MODEL,
-  client: claudeClient,
-  MAX_TOKENS,
-  TIMEOUT_MS,
-  webSearchTool,
+  complete,
+  completeWithSearch,
+  parseSearchResponse,
   extractJson,
-  parseStageResponse,
-  collectSearchSources,
-  createWithTools,
-} = require('./llm')
+  TIMEOUT_MS,
+  VALIDATOR_MODEL,
+  WRITER_MODEL,
+  REVIEW_SCHEMA,
+  VALIDATION_SCHEMA,
+} = require('./claude')
 
 const GROK_MODEL = process.env.GROK_MODEL || 'grok-4.7'
 
@@ -155,10 +155,8 @@ async function grokReview(draft, cluster, { date } = {}) {
       // nothing says so — which is exactly what the first pilot did.
       if (response.status >= 400 && response.status < 500) {
         console.error(
-          `   ✗ xAI rejected the request (${response.status}) — this is a configuration problem, not a transient one:
-` +
-          `     ${body.slice(0, 300)}
-` +
+          `   ✗ xAI rejected the request (${response.status}) — a configuration problem, not a transient one:\n` +
+          `     ${body.slice(0, 300)}\n` +
           `     Grok is NOT reviewing; every article today gets the Claude fallback only.`
         )
       }
@@ -221,17 +219,20 @@ RESPOND WITH JSON ONLY, as the last thing in your reply:
 }`
 
   try {
-    const { content, stopReason } = await createWithTools({
-      model: MODEL,
-      thinking: { type: 'adaptive' },
+    const { content, stopReason, sources } = await completeWithSearch({
+      model: WRITER_MODEL,
       system: CLAUDE_VALIDATION_SYSTEM,
-      tools: [webSearchTool(6)],
-      messages: [{ role: 'user', content: prompt }],
+      prompt,
+      maxUses: 6,
+      schema: REVIEW_SCHEMA,
     })
 
-    const result = parseStageResponse(content, stopReason, 'Fallback review')
-    return { ...result, reviewer: 'claude-fallback', sourcesConsulted: collectSearchSources(content) }
+    const result = parseSearchResponse(content, stopReason, 'Fallback review')
+    return { ...result, reviewer: 'claude-fallback', sourcesConsulted: sources }
   } catch (err) {
+    // A review that did not happen is not a review that passed. This used to
+    // return a 7.0 and `passesReview: true` on a parse failure, so an article
+    // could reach the validator carrying a clean bill of health nothing issued.
     console.warn(`   ⚠ Claude fallback review failed: ${err.message}`)
     return {
       overallScore: 0,
@@ -354,15 +355,19 @@ RESPOND WITH JSON ONLY:
 }`
 
   try {
-    const response = await claudeClient.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      thinking: { type: 'adaptive' },
+    // Opus, schema-constrained, no search. The validator transcribes a
+    // judgement rather than going and finding things out, and the schema
+    // makes the disposition vocabulary the gate depends on API-enforced:
+    // an invented disposition or a missing evidenceType cannot arrive.
+    const raw = await complete({
+      model: VALIDATOR_MODEL,
       system: CLAUDE_VALIDATION_SYSTEM,
-      messages: [{ role: 'user', content: prompt }],
+      prompt,
+      maxTokens: 4000,
+      schema: VALIDATION_SCHEMA,
     })
 
-    const validation = parseStageResponse(response.content, response.stop_reason, 'Final validation')
+    const validation = extractJson(raw)
     console.log(
       `   Final validation: approved=${validation.approved}, confidence=${validation.confidenceScore}/10, ` +
       `neutrality=${validation.neutralityRating}, ${validation.requiredIssueDispositions?.length ?? 0}/${required.length} required issue(s) accounted for`
@@ -370,6 +375,8 @@ RESPOND WITH JSON ONLY:
     return validation
   } catch (err) {
     // A validation that did not complete is not a validation that passed.
+    // This previously returned `approved: true` with the note "Auto-approved
+    // (validation parse failed)", which is how an unchecked article ships.
     console.warn(`   ⚠ Claude validation failed: ${err.message}`)
     return {
       approved: false,

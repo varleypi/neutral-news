@@ -76,4 +76,6 @@ jobs:
           # chained runs leave them empty and publish as normal.
           PIPELINE_DRY_RUN: ${{ github.event.inputs.dry_run || '' }}
           PIPELINE_MAX_CLUSTERS: ${{ github.event.inputs.max_clusters || '' }}
+          # Manual runs always regenerate; automatic triggers skip a date that already has an edition.
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: node pipeline/run.js

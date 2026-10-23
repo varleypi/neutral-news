@@ -22,7 +22,7 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
-const { client, MODEL, webSearchTool } = require('./llm')
+const { client, VERIFIER_MODEL, webSearchTool } = require('./claude')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
 const { evaluateGate } = require('./gate')
@@ -176,7 +176,7 @@ async function probeSchema() {
 
   try {
     const response = await client.messages.create({
-      model: MODEL,
+      model: VERIFIER_MODEL,
       max_tokens: 4000,
       thinking: { type: 'adaptive' },
       tools: [webSearchTool(2)],

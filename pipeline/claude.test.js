@@ -18,11 +18,11 @@ const assert = require('node:assert')
 
 const {
   extractJson,
-  parseStageResponse,
+  parseSearchResponse,
   collectText,
   collectSearchSources,
   collectSearchErrors,
-} = require('./llm')
+} = require('./claude')
 
 // ── Naming the real cause of a parse failure ────────────────────────────────
 // The 2026-10-19 pilot lost six calls to "No parseable JSON object in model
@@ -34,39 +34,39 @@ const {
 test('a truncated response is reported as a budget problem, not a parse problem', () => {
   const content = [{ type: 'text', text: 'Let me work through each claim in turn. First,' }]
   assert.throws(
-    () => parseStageResponse(content, 'max_tokens', 'Claim verification'),
-    /Claim verification hit the \d+-token output cap/
+    () => parseSearchResponse(content, 'max_tokens', 'Claim verification'),
+    /Claim verification hit its output cap/
   )
 })
 
 test('a refusal is named as a refusal', () => {
   assert.throws(
-    () => parseStageResponse([{ type: 'text', text: '' }], 'refusal', 'Final validation'),
+    () => parseSearchResponse([{ type: 'text', text: '' }], 'refusal', 'Final validation'),
     /declined by the model's safety classifiers/
   )
 })
 
 test('an unfinished tool turn is named as one', () => {
   assert.throws(
-    () => parseStageResponse([], 'max_legs_reached', 'Draft'),
+    () => parseSearchResponse([], 'max_legs_reached', 'Draft'),
     /did not finish its tool turn/
   )
 })
 
 test('a genuinely malformed response still reports the stop reason', () => {
   assert.throws(
-    () => parseStageResponse([{ type: 'text', text: 'no json' }], 'end_turn', 'Draft'),
+    () => parseSearchResponse([{ type: 'text', text: 'no json' }], 'end_turn', 'Draft'),
     /Draft: No parseable JSON object .*end_turn/
   )
 })
 
-test('parseStageResponse returns the object when the response is complete', () => {
+test('parseSearchResponse returns the object when the response is complete', () => {
   const content = [
     { type: 'thinking', thinking: 'searching' },
     { type: 'web_search_tool_result', content: [{ url: 'https://a.com' }] },
     { type: 'text', text: '{"approved": true}' },
   ]
-  assert.deepEqual(parseStageResponse(content, 'end_turn', 'Final validation'), { approved: true })
+  assert.deepEqual(parseSearchResponse(content, 'end_turn', 'Final validation'), { approved: true })
 })
 
 test('extracts a plain JSON object', () => {

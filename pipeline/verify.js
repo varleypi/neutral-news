@@ -23,13 +23,11 @@
  */
 
 const {
-  MODEL,
-  webSearchTool,
-  parseStageResponse,
-  collectSearchSources,
+  completeWithSearch,
+  parseSearchResponse,
   collectSearchErrors,
-  createWithTools,
-} = require('./llm')
+  VERIFIER_MODEL,
+} = require('./claude')
 
 // This is the stage the whole change exists for, and the only one whose job is
 // genuinely to reason about evidence. It keeps full effort while the writing
@@ -141,18 +139,22 @@ async function verifyClaims(article, cluster, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
 
   try {
-    const { content, stopReason } = await createWithTools({
-      model: MODEL,
-      thinking: { type: 'adaptive' },
-      output_config: { effort: VERIFY_EFFORT },
+    // No schema here, deliberately - see completeWithSearch in ./claude. This
+    // is the stage whose answer has to come out of what it just retrieved, and
+    // the one call that measured search-plus-schema came back schema-shaped
+    // and wrong.
+    //
+    // maxUses 8 was starvation. The second pilot hit "search access was
+    // exhausted" five times on a 19-claim article, and every starved claim
+    // came back UNVERIFIED - which the pipeline read as a factual problem and
+    // spent a revision, a re-check and a retry on. Giving this stage enough
+    // searches the first time is the cheapest fix in the system.
+    const { content, stopReason, sources: retrieved } = await completeWithSearch({
+      model: VERIFIER_MODEL,
       system: VERIFY_SYSTEM,
-      // 8 was starvation. The second pilot hit "search access was exhausted"
-      // five times on a 19-claim article, and every starved claim came back
-      // UNVERIFIED - which the pipeline then treated as a factual problem and
-      // spent a revision, a re-check and a retry on. The cheapest fix in the
-      // whole system is giving this stage enough searches the first time.
-      tools: [webSearchTool(Number(process.env.VERIFY_MAX_SEARCHES) || 24)],
-      messages: [{ role: 'user', content: buildVerifyPrompt(article, cluster, today) }],
+      prompt: buildVerifyPrompt(article, cluster, today),
+      maxUses: Number(process.env.VERIFY_MAX_SEARCHES) || 24,
+      effort: VERIFY_EFFORT,
     })
 
     const searchErrors = collectSearchErrors(content)
@@ -160,7 +162,6 @@ async function verifyClaims(article, cluster, { date } = {}) {
       console.warn(`   ⚠ Web search reported: ${searchErrors.join(', ')}`)
     }
 
-    const retrieved = collectSearchSources(content)
     if (retrieved.length === 0) {
       // No retrieval happened, so this run proves nothing about staleness.
       return {
@@ -170,7 +171,7 @@ async function verifyClaims(article, cluster, { date } = {}) {
       }
     }
 
-    const parsed = parseStageResponse(content, stopReason, 'Claim verification')
+    const parsed = parseSearchResponse(content, stopReason, 'Claim verification')
     const claims = (parsed.claims ?? []).map(c => ({
       claim: c.claim ?? '',
       excerpt: c.excerpt ?? '',

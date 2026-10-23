@@ -1,5 +1,6 @@
 import type { MetadataRoute } from 'next'
 import { getAllArticleRefs, getArchiveDays } from '@/lib/supabase'
+import { articlePath } from '@/lib/slug'
 import { canonical } from '@/lib/site'
 
 // Rebuild hourly alongside the rest of the site so new editions appear promptly.
@@ -30,7 +31,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }))
 
   const articlePages: MetadataRoute.Sitemap = articles.map(a => ({
-    url: canonical(`/article/${a.id}`),
+    url: canonical(articlePath(a)),
     lastModified: new Date(a.last_updated_at || a.published_at || `${a.date}T12:00:00Z`),
     changeFrequency: 'monthly',
     priority: 0.7,

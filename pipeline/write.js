@@ -16,17 +16,21 @@
  */
 
 const {
-  MODEL,
-  webSearchTool,
-  parseStageResponse,
-  collectSearchSources,
-  createWithTools,
-} = require('./llm')
+  complete,
+  completeWithSearch,
+  parseSearchResponse,
+  WRITER_MODEL,
+  ARTICLE_SCHEMA,
+} = require('./claude')
 
 // Drafting and revision are writing tasks, not reasoning tasks: the research is
 // done by search, not by thinking harder. Medium effort keeps them from
-// dominating the run's wall-clock, which on the first pilot they did.
+// dominating the run's wall-clock, which in the first pilot they did.
 const WRITE_EFFORT = process.env.CLAUDE_WRITE_EFFORT || 'medium'
+
+// Set WRITER_SEARCH=off to fall back to master's non-searching writer - the
+// cheaper shape, at the cost of the stage that was inventing background.
+const WRITER_SEARCHES = process.env.WRITER_SEARCH !== 'off'
 
 const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
 voice blends three sensibilities:
@@ -169,17 +173,23 @@ async function writeDraft(cluster, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
 
-  const { content, stopReason } = await createWithTools({
-    model: MODEL,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: WRITE_EFFORT },
+  if (!WRITER_SEARCHES) {
+    const text = await complete({ system: SYSTEM_PROMPT, prompt: buildDraftPrompt(cluster, today), maxTokens: 3000, schema: ARTICLE_SCHEMA })
+    const draft = JSON.parse(text)
+    console.log(`   Draft written: "${draft.headline}"`)
+    return draft
+  }
+
+  const { content, stopReason, sources } = await completeWithSearch({
+    model: WRITER_MODEL,
     system: SYSTEM_PROMPT,
-    tools: [webSearchTool(6)],
-    messages: [{ role: 'user', content: buildDraftPrompt(cluster, today) }],
+    prompt: buildDraftPrompt(cluster, today),
+    maxUses: 6,
+    effort: WRITE_EFFORT,
+    schema: ARTICLE_SCHEMA,
   })
 
-  const draft = parseStageResponse(content, stopReason, 'Draft')
-  const sources = collectSearchSources(content)
+  const draft = parseSearchResponse(content, stopReason, 'Draft')
   console.log(`   Draft written: "${draft.headline}" (${sources.length} source(s) consulted)`)
   return { ...draft, researchSources: sources }
 }
@@ -188,17 +198,26 @@ async function reviseWithCritique(draft, critique, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
   console.log(`   Revising article based on fact-check critique...`)
 
-  const { content, stopReason } = await createWithTools({
-    model: MODEL,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: WRITE_EFFORT },
+  if (!WRITER_SEARCHES) {
+    const text = await complete({ system: SYSTEM_PROMPT, prompt: buildRevisionPrompt(draft, critique, today), maxTokens: 3000, schema: ARTICLE_SCHEMA })
+    const revised = JSON.parse(text)
+    console.log(`   Revised: "${revised.headline}"`)
+    return revised
+  }
+
+  const { content, stopReason, sources } = await completeWithSearch({
+    model: WRITER_MODEL,
     system: SYSTEM_PROMPT,
-    tools: [webSearchTool(6)],
-    messages: [{ role: 'user', content: buildRevisionPrompt(draft, critique, today) }],
+    prompt: buildRevisionPrompt(draft, critique, today),
+    maxUses: 6,
+    effort: WRITE_EFFORT,
+    schema: ARTICLE_SCHEMA,
   })
 
-  const revised = parseStageResponse(content, stopReason, 'Revision')
-  const sources = [...new Set([...(draft.researchSources ?? []), ...collectSearchSources(content)])]
+  const revised = parseSearchResponse(content, stopReason, 'Revision')
+  const allSources = [...new Set([...(draft.researchSources ?? []), ...sources])]
+  console.log(`   Revised: "${revised.headline}"`)
+  return { ...revised, researchSources: allSources }
   console.log(`   Revised: "${revised.headline}"`)
   return { ...revised, researchSources: sources }
 }

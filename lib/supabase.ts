@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { NeutralArticle } from './types'
 import { MOCK_ARTICLES } from './mockData'
@@ -36,7 +37,14 @@ export async function getTodaysArticles(date?: string): Promise<NeutralArticle[]
   return (data ?? []) as NeutralArticle[]
 }
 
-export async function getArticle(id: number): Promise<NeutralArticle | null> {
+/**
+ * One approved article by id.
+ *
+ * Wrapped in React's `cache` so the three things that need it while rendering
+ * an article URL — `generateMetadata`, the page itself, and the JSON-LD builder
+ * — share a single query per request instead of issuing three.
+ */
+export const getArticle = cache(async (id: number): Promise<NeutralArticle | null> => {
   // Reject anything that isn't a plausible row id before it reaches the database
   if (!Number.isInteger(id) || id < 1 || id > Number.MAX_SAFE_INTEGER) return null
 
@@ -52,18 +60,26 @@ export async function getArticle(id: number): Promise<NeutralArticle | null> {
 
   if (error) return null
   return data as NeutralArticle
-}
+})
 
 /**
- * Latest articles for the RSS feed.
+ * Latest articles for the RSS feed and the Google News sitemap.
  *
  * Duplicates are excluded for the same reason they are kept out of the sitemap:
  * their pages declare a different URL as canonical, so advertising them to feed
  * readers — Spin Detector among them — would push subscribers to a page that
  * points somewhere else.
+ *
+ * Unlike the page queries this one reports failure rather than swallowing it.
+ * An empty page is a reasonable thing to serve for a moment; an empty *feed* is
+ * not — a subscriber that fetches one while the database is unreachable sees
+ * the publication go silent, and a caching proxy can hold that emptiness for as
+ * long as the response says it may. Callers decide what to do with `ok: false`.
  */
-export async function getRecentArticles(limit = 20): Promise<NeutralArticle[]> {
-  if (isDemoMode) return MOCK_ARTICLES
+export async function getRecentArticles(
+  limit = 20
+): Promise<{ articles: NeutralArticle[]; ok: boolean }> {
+  if (isDemoMode) return { articles: MOCK_ARTICLES, ok: true }
 
   const supabase = getClient()
   const { data, error } = await supabase
@@ -76,9 +92,9 @@ export async function getRecentArticles(limit = 20): Promise<NeutralArticle[]> {
 
   if (error) {
     console.error(`Failed to fetch recent articles: ${error.message}`)
-    return []
+    return { articles: [], ok: false }
   }
-  return (data ?? []) as NeutralArticle[]
+  return { articles: (data ?? []) as NeutralArticle[], ok: true }
 }
 
 /** Every approved article for one edition date, ranked as the homepage ranks them. */
@@ -153,17 +169,29 @@ export async function getArchiveDays(): Promise<ArchiveDay[]> {
  * the original as their canonical URL, so listing them here would ask crawlers
  * to index pages we have already told them not to treat as authoritative.
  */
-export async function getAllArticleRefs(): Promise<
-  { id: number; date: string; published_at: string; last_updated_at?: string | null }[]
-> {
+export interface ArticleRef {
+  id: number
+  /** Needed to build the URL: article paths are `/article/<headline-slug>-<id>`. */
+  headline: string
+  date: string
+  published_at: string
+  last_updated_at?: string | null
+}
+
+export async function getAllArticleRefs(): Promise<ArticleRef[]> {
   if (isDemoMode) {
-    return MOCK_ARTICLES.map(a => ({ id: a.id, date: a.date, published_at: a.published_at }))
+    return MOCK_ARTICLES.map(a => ({
+      id: a.id,
+      headline: a.headline,
+      date: a.date,
+      published_at: a.published_at,
+    }))
   }
 
   const supabase = getClient()
   const { data, error } = await supabase
     .from('neutral_articles')
-    .select('id, date, published_at, last_updated_at')
+    .select('id, headline, date, published_at, last_updated_at')
     .eq('validation_approved', true)
     .is('canonical_article_id', null)
     .order('published_at', { ascending: false })
@@ -173,7 +201,7 @@ export async function getAllArticleRefs(): Promise<
     console.error(`Failed to fetch article refs: ${error.message}`)
     return []
   }
-  return (data ?? []) as { id: number; date: string; published_at: string; last_updated_at?: string | null }[]
+  return (data ?? []) as ArticleRef[]
 }
 
 export async function getLatestDate(): Promise<string> {

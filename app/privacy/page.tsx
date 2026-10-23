@@ -1,12 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { canonical } from '@/lib/site'
+import { alternatesFor } from '@/lib/site'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — Neutral News',
   description:
     'How Neutral News handles data, cookies, and third-party advertising, including Google AdSense.',
-  alternates: { canonical: canonical('/privacy') },
+  alternates: alternatesFor('/privacy'),
 }
 
 // Shown as "last updated". Bump this whenever the policy text below changes.

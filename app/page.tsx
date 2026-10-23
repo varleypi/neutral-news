@@ -1,14 +1,14 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { getTodaysArticles, getLatestDate, isDemoMode } from '@/lib/supabase'
-import { canonical } from '@/lib/site'
+import { alternatesFor } from '@/lib/site'
 import ArticleCard from '@/components/ArticleCard'
 import AdSlot from '@/components/AdSlot'
 
 export const revalidate = 3600 // revalidate every hour
 
 export const metadata: Metadata = {
-  alternates: { canonical: canonical('/') },
+  alternates: alternatesFor('/'),
 }
 
 export default async function HomePage() {

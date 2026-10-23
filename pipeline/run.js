@@ -28,7 +28,7 @@ const { writeDraft, reviseWithCritique } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
 const { verifyClaims, verificationIssues } = require('./verify')
 const { evaluateGate, describeBlockers, excerptStillPresent } = require('./gate')
-const { storeArticles, updateArticleInPlace, logError } = require('./store')
+const { storeArticles, updateArticleInPlace, logError, hasSuccessfulRun } = require('./store')
 const { postDailyThread } = require('./social')
 const {
   getRecentlyPublished,
@@ -337,6 +337,21 @@ async function main() {
     if (Number.isFinite(MAX_CLUSTERS)) console.log(`   Processing at most ${MAX_CLUSTERS} cluster(s)`)
   }
   const startTime = Date.now()
+
+  // The dispatch from SpinDetector and the backup cron can both fire on the same
+  // day; each full run costs dozens of Claude calls, so only the first one works.
+  if (process.env.FORCE_RUN !== 'true' && !DRY_RUN) {
+    let alreadyRan = false
+    try {
+      alreadyRan = await hasSuccessfulRun(date)
+    } catch (err) {
+      console.warn(`   ⚠ ${err.message} — running anyway`)
+    }
+    if (alreadyRan) {
+      console.log(`\n⏭  The ${date} edition was already generated — skipping (set FORCE_RUN=true to regenerate)`)
+      return
+    }
+  }
 
   // Stage 1: Select a ranked pool of candidate clusters
   console.log('\n🔍 Stage 1 — Selecting candidate story clusters from SpinDetector...')
