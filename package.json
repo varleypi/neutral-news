@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "node --test \"pipeline/**/*.test.js\"",
     "pipeline": "node pipeline/run.js",
+    "probe": "node pipeline/probe.js",
     "backfill-canonicals": "node pipeline/backfill-canonicals.js"
   },
   "dependencies": {

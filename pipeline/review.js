@@ -20,6 +20,7 @@ const {
   MODEL,
   client: claudeClient,
   MAX_TOKENS,
+  TIMEOUT_MS,
   webSearchTool,
   extractJson,
   parseStageResponse,
@@ -137,7 +138,13 @@ async function grokReview(draft, cluster, { date } = {}) {
         ],
         tools: [{ type: 'web_search' }],
       }),
-      signal: AbortSignal.timeout(120000),
+      // Two minutes was never enough for a search-backed Grok review, and it
+      // showed: across both pilots Grok completed exactly zero reviews. The
+      // first run failed on a retired parameter, the second aborted here every
+      // single time, and both fell through to the Claude fallback - so the
+      // pipeline has only ever had one reviewer, not two. Matches the Claude
+      // client's budget now.
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     })
 
     if (!response.ok) {

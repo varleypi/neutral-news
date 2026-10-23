@@ -27,7 +27,7 @@ const { selectTopClusters } = require('./select')
 const { writeDraft, reviseWithCritique } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
 const { verifyClaims, verificationIssues } = require('./verify')
-const { evaluateGate, describeBlockers } = require('./gate')
+const { evaluateGate, describeBlockers, excerptStillPresent } = require('./gate')
 const { storeArticles, updateArticleInPlace, logError } = require('./store')
 const { postDailyThread } = require('./social')
 const {
@@ -103,7 +103,7 @@ function buildCritique(review, verification) {
   return parts.join('\n\n')
 }
 
-/** Review and verify in parallel — neither depends on the other's output. */
+/** Review and verify in parallel - neither depends on the other's output. */
 async function checkArticle(article, cluster, date) {
   const [review, verification] = await Promise.all([
     grokReview(article, cluster, { date }),
@@ -113,6 +113,37 @@ async function checkArticle(article, cluster, date) {
   // holds them to the same standard as anything the fact-checker raised.
   const issues = [...(review.issues ?? []), ...verificationIssues(verification)]
   return { review: { ...review, issues }, verification }
+}
+
+/**
+ * Which required issues are still sitting in the article, word for word.
+ *
+ * Free, and worth running before anything that costs money. In the second pilot
+ * the writer was handed four required corrections, returned a visibly unchanged
+ * article, and the pipeline spent a fact-check, a verification and a validation
+ * finding that out - then spent four more calls retrying. The same answer is
+ * available locally by looking at the text.
+ */
+function unresolvedRequired(article, review) {
+  const body = `${article.headline}\n${article.summary}\n${article.body}\n${(article.keyFacts ?? []).join('\n')}`
+  return (review.issues ?? []).filter(i => i.severity === 'required' && excerptStillPresent(i.excerpt, body))
+}
+
+/** A pointed second ask, naming the text that did not move. */
+function buildNonComplianceNotes(unresolved) {
+  return [
+    'Your previous revision did not apply these required corrections. Each passage below is',
+    'still in the article, word for word. This is the last pass before the story is dropped.',
+    '',
+    'For each one, do ONE of two things:',
+    '  - delete the passage, or',
+    '  - rewrite it so the problem is gone AND add the source that backs it to the references.',
+    '',
+    'Do not keep a passage on the grounds that it is well known or obviously true. If you',
+    'cannot source it, cut it. The article is better short than wrong.',
+    '',
+    ...unresolved.map((i, n) => `${n + 1}. [${i.type}] "${i.excerpt}"\n   required fix: ${i.correction}`),
+  ].join('\n')
 }
 
 async function processCluster(cluster, date) {
@@ -125,19 +156,34 @@ async function processCluster(cluster, date) {
   console.log(`   Running fact-check and claim verification...`)
   let { review, verification } = await checkArticle(article, cluster, date)
 
-  // Step 4: Revise if anything was raised, then re-check what readers will see
-  if (review.issues?.length > 0) {
+  // Step 4: Revise only for REQUIRED issues.
+  //
+  // This used to fire whenever the review raised anything at all, including
+  // purely stylistic suggestions - and each time it cost a revision plus a full
+  // re-check, three paid calls, to polish wording the gate was never going to
+  // block on. Suggestions still reach the writer, but only when a required
+  // issue has already earned the round trip.
+  const required = (review.issues ?? []).filter(i => i.severity === 'required')
+  if (required.length > 0) {
     article = await reviseWithCritique(article, buildCritique(review, verification), { date })
+
+    // Free check before any paid one: did the writer actually do it?
+    const stillThere = unresolvedRequired(article, review)
+    if (stillThere.length > 0) {
+      console.log(`   ${stillThere.length} required correction(s) not applied - asking again before re-checking`)
+      article = await reviseWithCritique(article, buildNonComplianceNotes(stillThere), { date })
+    }
+
     console.log(`   Re-checking revised article...`)
     const rechecked = await checkArticle(article, cluster, date)
     console.log(`   Score after revision: ${rechecked.review.overallScore}/10 (was ${review.overallScore}/10)`)
     review = rechecked.review
     verification = rechecked.verification
   } else {
-    console.log(`   No issues found — skipping revision`)
+    console.log(`   No required issues - skipping revision`)
   }
 
-  // Step 5: Final validation — which now reports rather than decides
+  // Step 5: Final validation - which now reports rather than decides
   console.log(`   Running Claude final validation...`)
   let validation = await claudeFinalValidation(article, review, { verification, date })
 
@@ -148,7 +194,7 @@ async function processCluster(cluster, date) {
   // fails twice is dropped and the next-ranked candidate takes its slot.
   if (!gate.passed) {
     console.log(`   Gate blocked the article:`)
-    describeBlockers(gate.blockers).forEach(b => console.log(`     · ${b}`))
+    describeBlockers(gate.blockers).forEach(b => console.log(`     . ${b}`))
     console.log(`   Revising once more against the blockers...`)
 
     const blockerNotes = [
@@ -167,7 +213,7 @@ async function processCluster(cluster, date) {
     validation = await claudeFinalValidation(article, review, { verification, date })
     gate = evaluateGate({ article, review, validation, verification })
     console.log(`   After retry: gate ${gate.passed ? 'passed' : 'still blocked'}`)
-    if (!gate.passed) describeBlockers(gate.blockers).forEach(b => console.log(`     · ${b}`))
+    if (!gate.passed) describeBlockers(gate.blockers).forEach(b => console.log(`     . ${b}`))
   }
 
   return {

@@ -1,0 +1,40 @@
+name: Pipeline Probe
+
+# Cheap diagnostics for the expensive stages — about two model calls and a
+# couple of minutes, against a fixed article with a known answer.
+#
+# This exists so that checking a config change never again means running the
+# daily pipeline end to end. Deliberately has no Supabase, Vercel or X
+# credentials: it cannot read clusters, store anything, deploy or post.
+on:
+  workflow_dispatch:
+    inputs:
+      probes:
+        description: 'Which probes to run: gate, verify, grok (space-separated; blank = all).'
+        required: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (free)
+        run: npm test
+
+      - name: Run probes
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+        run: node pipeline/probe.js ${{ github.event.inputs.probes }}

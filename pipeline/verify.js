@@ -95,14 +95,27 @@ Search the web for each claim. Prefer primary sources — company investor relat
 regulatory filings, official statements — then established news outlets. For anything that
 could have changed recently, check for news later than your training data.
 
+BUDGET — SPEND IT ON WHAT MATTERS
+You have a limited number of searches. Triage before you start: rank the assertions by how
+much damage a wrong one would do, and work down that list. A stale ownership or status claim
+outranks a precise-sounding detail, which outranks routine colour. Check AT MOST the 12 most
+consequential, and say in the summary if you left others unchecked.
+
 VERDICTS
   "CONTRADICTED" — current sources show the claim is false or out of date. Say what is
                    actually the case in the "evidence" field.
-  "UNVERIFIED"   — you searched and found nothing that settles it either way.
+  "UNVERIFIED"   — you actually searched for this one and found nothing that settles it.
+  "UNCHECKED"    — you ran out of search budget before reaching it. This is NOT a finding
+                   about the claim; it is a report about you. Never use it for something you
+                   searched for and could not confirm — that is "UNVERIFIED".
   "SUPPORTED"    — current sources confirm it.
 
+The UNVERIFIED/UNCHECKED split matters: one says the world has no answer, the other says you
+did not get to ask. Reporting a budget failure as a finding sends the pipeline off to rewrite
+a sentence that was probably fine.
+
 Be decisive. "CONTRADICTED" is for a claim the evidence actually contradicts, not one you
-merely could not confirm — that is "UNVERIFIED".
+merely could not confirm.
 
 RESPOND WITH JSON ONLY, as the last thing in your reply:
 {
@@ -110,7 +123,7 @@ RESPOND WITH JSON ONLY, as the last thing in your reply:
     {
       "claim": "the assertion, in your own words",
       "excerpt": "the exact text from the article that makes it",
-      "verdict": "SUPPORTED|CONTRADICTED|UNVERIFIED",
+      "verdict": "SUPPORTED|CONTRADICTED|UNVERIFIED|UNCHECKED",
       "evidence": "what the sources show; for CONTRADICTED, state the current fact",
       "sources": ["https://..."]
     }
@@ -133,7 +146,12 @@ async function verifyClaims(article, cluster, { date } = {}) {
       thinking: { type: 'adaptive' },
       output_config: { effort: VERIFY_EFFORT },
       system: VERIFY_SYSTEM,
-      tools: [webSearchTool(8)],
+      // 8 was starvation. The second pilot hit "search access was exhausted"
+      // five times on a 19-claim article, and every starved claim came back
+      // UNVERIFIED - which the pipeline then treated as a factual problem and
+      // spent a revision, a re-check and a retry on. The cheapest fix in the
+      // whole system is giving this stage enough searches the first time.
+      tools: [webSearchTool(Number(process.env.VERIFY_MAX_SEARCHES) || 24)],
       messages: [{ role: 'user', content: buildVerifyPrompt(article, cluster, today) }],
     })
 
@@ -156,7 +174,7 @@ async function verifyClaims(article, cluster, { date } = {}) {
     const claims = (parsed.claims ?? []).map(c => ({
       claim: c.claim ?? '',
       excerpt: c.excerpt ?? '',
-      verdict: ['SUPPORTED', 'CONTRADICTED', 'UNVERIFIED'].includes(c.verdict) ? c.verdict : 'UNVERIFIED',
+      verdict: ['SUPPORTED', 'CONTRADICTED', 'UNVERIFIED', 'UNCHECKED'].includes(c.verdict) ? c.verdict : 'UNVERIFIED',
       evidence: c.evidence ?? '',
       // Only credit URLs the model actually retrieved — otherwise a remembered
       // citation could launder a remembered fact straight past the gate.
@@ -166,8 +184,17 @@ async function verifyClaims(article, cluster, { date } = {}) {
     const counts = claims.reduce((acc, c) => ({ ...acc, [c.verdict]: (acc[c.verdict] ?? 0) + 1 }), {})
     console.log(
       `   Claim verification: ${claims.length} claim(s) checked across ${retrieved.length} source(s) — ` +
-      `${counts.SUPPORTED ?? 0} supported, ${counts.CONTRADICTED ?? 0} contradicted, ${counts.UNVERIFIED ?? 0} unverified`
+      `${counts.SUPPORTED ?? 0} supported, ${counts.CONTRADICTED ?? 0} contradicted, ` +
+      `${counts.UNVERIFIED ?? 0} unverified, ${counts.UNCHECKED ?? 0} unchecked`
     )
+    // Distinguishing this from a factual finding is the point: it tells the
+    // operator to raise the budget rather than to go looking for a bad claim.
+    if (counts.UNCHECKED > 0) {
+      console.warn(
+        `   ⚠ ${counts.UNCHECKED} claim(s) went unchecked for want of search budget — ` +
+        `raise VERIFY_MAX_SEARCHES (currently ${Number(process.env.VERIFY_MAX_SEARCHES) || 24})`
+      )
+    }
     for (const c of claims.filter(c => c.verdict === 'CONTRADICTED')) {
       console.log(`   ✗ CONTRADICTED: ${c.claim} — ${c.evidence}`)
     }
@@ -195,12 +222,14 @@ async function verifyClaims(article, cluster, { date } = {}) {
  */
 function verificationIssues(verification) {
   return (verification?.claims ?? [])
-    .filter(c => c.verdict === 'UNVERIFIED')
+    .filter(c => c.verdict === 'UNVERIFIED' || c.verdict === 'UNCHECKED')
     .map(c => ({
-      type: 'UNVERIFIED',
+      type: c.verdict,
       severity: 'required',
       excerpt: c.excerpt,
-      correction: `Could not be confirmed against current sources. Remove it, or support it from a listed reference. (${c.evidence || 'no corroborating source found'})`,
+      correction: c.verdict === 'UNCHECKED'
+        ? `The verifier ran out of search budget before reaching this, so nothing is known about it either way. Support it from a listed reference, or remove it.`
+        : `Could not be confirmed against current sources. Remove it, or support it from a listed reference. (${c.evidence || 'no corroborating source found'})`,
     }))
 }
 
