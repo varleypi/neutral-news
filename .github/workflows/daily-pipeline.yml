@@ -24,6 +24,9 @@ on:
         description: 'Run the cheap probes (~2 API calls) instead of the pipeline.'
         type: boolean
         default: false
+      probes:
+        description: 'Which probes, space-separated (blank = all). Only used with probe_only.'
+        required: false
 
 jobs:
   generate-articles:
@@ -49,7 +52,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-        run: node pipeline/probe.js
+        run: node pipeline/probe.js ${{ github.event.inputs.probes }}
 
       - name: Run article generation pipeline
         if: ${{ github.event.inputs.probe_only != 'true' }}

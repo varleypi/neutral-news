@@ -22,6 +22,7 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
+const { client, MODEL, webSearchTool } = require('./llm')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
 const { evaluateGate } = require('./gate')
@@ -155,12 +156,72 @@ async function probeGrok() {
   }
 }
 
+/**
+ * One call, and it decides a design.
+ *
+ * master guarantees parseable JSON with structured outputs; this branch needs
+ * server-side web search. The docs describe structured outputs alongside STRICT
+ * CLIENT tools and say nothing either way about server tools, so the only
+ * honest way to know whether the two compose is to send one request that uses
+ * both. If it works, every stage can have schema-guaranteed output. If it 400s,
+ * the searching stages keep a text parser and only the others get schemas.
+ */
+async function probeSchema() {
+  const schema = {
+    type: 'object',
+    properties: { ticker: { type: 'string' }, listed: { type: 'boolean' } },
+    required: ['ticker', 'listed'],
+    additionalProperties: false,
+  }
+
+  try {
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 4000,
+      thinking: { type: 'adaptive' },
+      tools: [webSearchTool(2)],
+      output_config: { format: { type: 'json_schema', schema } },
+      messages: [{
+        role: 'user',
+        content: 'Search the web for the ticker symbol SpaceX trades under, and whether it is publicly listed.',
+      }],
+    })
+
+    const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('')
+    const searched = response.content.some(b => b.type === 'web_search_tool_result')
+
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      return { ok: false, detail: `accepted both, but the output was not schema JSON (stop_reason: ${response.stop_reason}): ${text.slice(0, 160)}` }
+    }
+
+    return {
+      ok: true,
+      detail: `structured outputs AND web search compose` +
+        ` (searched: ${searched}, got ${JSON.stringify(parsed)}) — schemas can be used everywhere`,
+    }
+  } catch (err) {
+    // A 400 here is the answer, not a failure of the probe.
+    const incompatible = err?.status === 400
+    return {
+      ok: !incompatible ? false : true,
+      detail: incompatible
+        ? `INCOMPATIBLE (400): ${err.message.slice(0, 220)}
+       -> searching stages keep the text parser; non-tool stages get schemas`
+        : `probe could not reach a verdict: ${err.message}`,
+    }
+  }
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
 
 const PROBES = {
   gate: { run: probeGate, cost: 'free' },
   verify: { run: probeVerify, cost: '1 call' },
   grok: { run: probeGrok, cost: '1 call' },
+  schema: { run: probeSchema, cost: '1 call' },
 }
 
 async function main() {
