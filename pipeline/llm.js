@@ -1,8 +1,12 @@
 /**
  * Shared plumbing for talking to Claude.
  *
- * Two things live here that every stage needs and that each stage used to do
+ * Three things live here that every stage needs and that each stage used to do
  * slightly differently:
+ *
+ *   • The client itself, configured once. The SDK's defaults — a 10-minute
+ *     timeout with two retries — meant a slow call could occupy half an hour
+ *     before failing. The 2026-10-19 pilot lost three calls that way.
  *
  *   • JSON extraction. Every stage used `text.match(/\{[\s\S]*\}/)`, which runs
  *     from the first `{` in the response to the last `}` anywhere after it. With
@@ -16,7 +20,31 @@
  *     Resuming means handing the assistant's own content back and asking again.
  */
 
+const Anthropic = require('@anthropic-ai/sdk')
+
 const MODEL = process.env.CLAUDE_MODEL || 'claude-opus-4-8'
+
+// Per-attempt ceiling. Combined with one retry this bounds a single stage at
+// roughly twice this, instead of the SDK default's 30 minutes.
+const TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS) || 8 * 60 * 1000
+
+/**
+ * Output budget.
+ *
+ * This is the fix for the pilot's six "No parseable JSON" failures. Thinking
+ * tokens are charged against `max_tokens`, so a stage running adaptive thinking
+ * and half a dozen searches on a 4,000-token budget spends the whole allowance
+ * reasoning and gets truncated before it writes the JSON the pipeline needs.
+ * Every stage returns a small object; the budget is for the thinking in front
+ * of it, not the answer.
+ */
+const MAX_TOKENS = Number(process.env.CLAUDE_MAX_TOKENS) || 16000
+
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: TIMEOUT_MS,
+  maxRetries: 1,
+})
 
 /** The web search tool definition, shared by every stage that retrieves. */
 function webSearchTool(maxUses = 6) {
@@ -75,6 +103,30 @@ function extractJson(text) {
   throw new Error('No parseable JSON object in model response')
 }
 
+/**
+ * Parse a stage's reply, naming the real cause when it fails.
+ *
+ * A truncated response and a malformed one both leave the pipeline without
+ * JSON, but they call for different fixes — one is a budget problem, the other
+ * a prompting problem. The pilot reported both as "No parseable JSON object",
+ * which sent the diagnosis the wrong way.
+ */
+function parseStageResponse(content, stopReason, stage) {
+  try {
+    return extractJson(collectText(content))
+  } catch (err) {
+    if (stopReason === 'max_tokens') {
+      throw new Error(
+        `${stage} hit the ${MAX_TOKENS}-token output cap before returning JSON — ` +
+        `raise CLAUDE_MAX_TOKENS or lower the effort for this stage`
+      )
+    }
+    if (stopReason === 'refusal') throw new Error(`${stage} was declined by the model's safety classifiers`)
+    if (stopReason === 'max_legs_reached') throw new Error(`${stage} did not finish its tool turn within the leg limit`)
+    throw new Error(`${stage}: ${err.message} (stop_reason: ${stopReason})`)
+  }
+}
+
 /** Concatenate the text blocks of a response, ignoring thinking and tool blocks. */
 function collectText(content = []) {
   return content
@@ -114,15 +166,16 @@ function collectSearchErrors(content = []) {
  * Run a request to completion, resuming through `pause_turn`.
  *
  * Returns the accumulated content blocks across every leg of the turn, so
- * callers see all search results and all text regardless of how many pauses
- * the server took.
+ * callers see all search results and all text regardless of how many pauses the
+ * server took, plus the stop reason of the final leg so they can tell a
+ * truncated answer from a finished one.
  */
-async function createWithTools(client, params, { maxLegs = 4 } = {}) {
+async function createWithTools(params, { maxLegs = 4 } = {}) {
   const messages = [...params.messages]
   const all = []
 
   for (let leg = 0; leg < maxLegs; leg++) {
-    const response = await client.messages.create({ ...params, messages })
+    const response = await client.messages.create({ max_tokens: MAX_TOKENS, ...params, messages })
     all.push(...response.content)
 
     if (response.stop_reason !== 'pause_turn') return { content: all, stopReason: response.stop_reason }
@@ -136,8 +189,12 @@ async function createWithTools(client, params, { maxLegs = 4 } = {}) {
 
 module.exports = {
   MODEL,
+  MAX_TOKENS,
+  TIMEOUT_MS,
+  client,
   webSearchTool,
   extractJson,
+  parseStageResponse,
   collectText,
   collectSearchSources,
   collectSearchErrors,

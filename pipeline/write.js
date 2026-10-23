@@ -15,17 +15,18 @@
  * every downstream check to catch invented background after the fact.
  */
 
-const Anthropic = require('@anthropic-ai/sdk')
 const {
   MODEL,
   webSearchTool,
-  extractJson,
-  collectText,
+  parseStageResponse,
   collectSearchSources,
   createWithTools,
 } = require('./llm')
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// Drafting and revision are writing tasks, not reasoning tasks: the research is
+// done by search, not by thinking harder. Medium effort keeps them from
+// dominating the run's wall-clock, which on the first pilot they did.
+const WRITE_EFFORT = process.env.CLAUDE_WRITE_EFFORT || 'medium'
 
 const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
 voice blends three sensibilities:
@@ -168,16 +169,16 @@ async function writeDraft(cluster, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
 
-  const { content } = await createWithTools(client, {
+  const { content, stopReason } = await createWithTools({
     model: MODEL,
-    max_tokens: 8000,
     thinking: { type: 'adaptive' },
+    output_config: { effort: WRITE_EFFORT },
     system: SYSTEM_PROMPT,
     tools: [webSearchTool(6)],
     messages: [{ role: 'user', content: buildDraftPrompt(cluster, today) }],
   })
 
-  const draft = extractJson(collectText(content))
+  const draft = parseStageResponse(content, stopReason, 'Draft')
   const sources = collectSearchSources(content)
   console.log(`   Draft written: "${draft.headline}" (${sources.length} source(s) consulted)`)
   return { ...draft, researchSources: sources }
@@ -187,16 +188,16 @@ async function reviseWithCritique(draft, critique, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
   console.log(`   Revising article based on fact-check critique...`)
 
-  const { content } = await createWithTools(client, {
+  const { content, stopReason } = await createWithTools({
     model: MODEL,
-    max_tokens: 8000,
     thinking: { type: 'adaptive' },
+    output_config: { effort: WRITE_EFFORT },
     system: SYSTEM_PROMPT,
     tools: [webSearchTool(6)],
     messages: [{ role: 'user', content: buildRevisionPrompt(draft, critique, today) }],
   })
 
-  const revised = extractJson(collectText(content))
+  const revised = parseStageResponse(content, stopReason, 'Revision')
   const sources = [...new Set([...(draft.researchSources ?? []), ...collectSearchSources(content)])]
   console.log(`   Revised: "${revised.headline}"`)
   return { ...revised, researchSources: sources }

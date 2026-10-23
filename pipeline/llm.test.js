@@ -16,7 +16,58 @@
 const { test } = require('node:test')
 const assert = require('node:assert')
 
-const { extractJson, collectText, collectSearchSources, collectSearchErrors } = require('./llm')
+const {
+  extractJson,
+  parseStageResponse,
+  collectText,
+  collectSearchSources,
+  collectSearchErrors,
+} = require('./llm')
+
+// ── Naming the real cause of a parse failure ────────────────────────────────
+// The 2026-10-19 pilot lost six calls to "No parseable JSON object in model
+// response". The cause was not malformed JSON: thinking tokens count against
+// max_tokens, the budget was 4000, and the responses were cut off before they
+// got to the JSON. Reporting both cases identically sent the diagnosis the
+// wrong way, so the stop reason is now part of the error.
+
+test('a truncated response is reported as a budget problem, not a parse problem', () => {
+  const content = [{ type: 'text', text: 'Let me work through each claim in turn. First,' }]
+  assert.throws(
+    () => parseStageResponse(content, 'max_tokens', 'Claim verification'),
+    /Claim verification hit the \d+-token output cap/
+  )
+})
+
+test('a refusal is named as a refusal', () => {
+  assert.throws(
+    () => parseStageResponse([{ type: 'text', text: '' }], 'refusal', 'Final validation'),
+    /declined by the model's safety classifiers/
+  )
+})
+
+test('an unfinished tool turn is named as one', () => {
+  assert.throws(
+    () => parseStageResponse([], 'max_legs_reached', 'Draft'),
+    /did not finish its tool turn/
+  )
+})
+
+test('a genuinely malformed response still reports the stop reason', () => {
+  assert.throws(
+    () => parseStageResponse([{ type: 'text', text: 'no json' }], 'end_turn', 'Draft'),
+    /Draft: No parseable JSON object .*end_turn/
+  )
+})
+
+test('parseStageResponse returns the object when the response is complete', () => {
+  const content = [
+    { type: 'thinking', thinking: 'searching' },
+    { type: 'web_search_tool_result', content: [{ url: 'https://a.com' }] },
+    { type: 'text', text: '{"approved": true}' },
+  ]
+  assert.deepEqual(parseStageResponse(content, 'end_turn', 'Final validation'), { approved: true })
+})
 
 test('extracts a plain JSON object', () => {
   assert.deepEqual(extractJson('{"approved": true}'), { approved: true })

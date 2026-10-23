@@ -16,17 +16,16 @@
  * approved. The waiver language is gone, and what remains of it is enforced in code.
  */
 
-const Anthropic = require('@anthropic-ai/sdk')
 const {
   MODEL,
+  client: claudeClient,
+  MAX_TOKENS,
   webSearchTool,
   extractJson,
-  collectText,
+  parseStageResponse,
   collectSearchSources,
   createWithTools,
 } = require('./llm')
-
-const claudeClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 const GROK_MODEL = process.env.GROK_MODEL || 'grok-4.7'
 
@@ -126,20 +125,38 @@ async function grokReview(draft, cluster, { date } = {}) {
     const response = await fetch('https://api.x.ai/v1/responses', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.XAI_API_KEY}` },
+      // Exactly the documented Responses-API shape. The first pilot also sent
+      // `search_parameters`, the old Live Search config, and every call came
+      // back 410 "Live search is deprecated" — so Grok never reviewed anything
+      // and silently fell through to the Claude path all day. Tools only.
       body: JSON.stringify({
         model: GROK_MODEL,
-        max_output_tokens: 4000,
         input: [
           { role: 'system', content: GROK_REVIEW_SYSTEM },
           { role: 'user', content: buildGrokPrompt(draft, cluster, today) },
         ],
         tools: [{ type: 'web_search' }],
-        search_parameters: { mode: 'auto', return_citations: true, max_search_results: 8 },
       }),
       signal: AbortSignal.timeout(120000),
     })
 
-    if (!response.ok) throw new Error(`xAI API ${response.status}: ${await response.text()}`)
+    if (!response.ok) {
+      const body = await response.text()
+      // 4xx here is a configuration problem, not a blip: a retired parameter,
+      // a bad key, a model this account cannot reach. Falling through quietly
+      // means the pipeline runs all day with one reviewer instead of two and
+      // nothing says so — which is exactly what the first pilot did.
+      if (response.status >= 400 && response.status < 500) {
+        console.error(
+          `   ✗ xAI rejected the request (${response.status}) — this is a configuration problem, not a transient one:
+` +
+          `     ${body.slice(0, 300)}
+` +
+          `     Grok is NOT reviewing; every article today gets the Claude fallback only.`
+        )
+      }
+      throw new Error(`xAI API ${response.status}: ${body}`)
+    }
     parsed = parseXaiResponse(await response.json())
   } catch (err) {
     console.warn(`   ⚠ Grok review failed: ${err.message} — falling back to Claude review`)
@@ -197,16 +214,15 @@ RESPOND WITH JSON ONLY, as the last thing in your reply:
 }`
 
   try {
-    const { content } = await createWithTools(claudeClient, {
+    const { content, stopReason } = await createWithTools({
       model: MODEL,
-      max_tokens: 4000,
       thinking: { type: 'adaptive' },
       system: CLAUDE_VALIDATION_SYSTEM,
       tools: [webSearchTool(6)],
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const result = extractJson(collectText(content))
+    const result = parseStageResponse(content, stopReason, 'Fallback review')
     return { ...result, reviewer: 'claude-fallback', sourcesConsulted: collectSearchSources(content) }
   } catch (err) {
     console.warn(`   ⚠ Claude fallback review failed: ${err.message}`)
@@ -333,13 +349,13 @@ RESPOND WITH JSON ONLY:
   try {
     const response = await claudeClient.messages.create({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: MAX_TOKENS,
       thinking: { type: 'adaptive' },
       system: CLAUDE_VALIDATION_SYSTEM,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const validation = extractJson(collectText(response.content))
+    const validation = parseStageResponse(response.content, response.stop_reason, 'Final validation')
     console.log(
       `   Final validation: approved=${validation.approved}, confidence=${validation.confidenceScore}/10, ` +
       `neutrality=${validation.neutralityRating}, ${validation.requiredIssueDispositions?.length ?? 0}/${required.length} required issue(s) accounted for`

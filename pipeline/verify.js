@@ -22,18 +22,19 @@
  *   SUPPORTED    — current sources agree. Fine to publish.
  */
 
-const Anthropic = require('@anthropic-ai/sdk')
 const {
   MODEL,
   webSearchTool,
-  extractJson,
-  collectText,
+  parseStageResponse,
   collectSearchSources,
   collectSearchErrors,
   createWithTools,
 } = require('./llm')
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// This is the stage the whole change exists for, and the only one whose job is
+// genuinely to reason about evidence. It keeps full effort while the writing
+// stages run lower.
+const VERIFY_EFFORT = process.env.CLAUDE_VERIFY_EFFORT || 'high'
 
 const VERIFY_SYSTEM = `You are a fact-checker with live web access, working for a neutral news service.
 
@@ -127,10 +128,10 @@ async function verifyClaims(article, cluster, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
 
   try {
-    const { content, stopReason } = await createWithTools(client, {
+    const { content, stopReason } = await createWithTools({
       model: MODEL,
-      max_tokens: 8000,
       thinking: { type: 'adaptive' },
+      output_config: { effort: VERIFY_EFFORT },
       system: VERIFY_SYSTEM,
       tools: [webSearchTool(8)],
       messages: [{ role: 'user', content: buildVerifyPrompt(article, cluster, today) }],
@@ -151,7 +152,7 @@ async function verifyClaims(article, cluster, { date } = {}) {
       }
     }
 
-    const parsed = extractJson(collectText(content))
+    const parsed = parseStageResponse(content, stopReason, 'Claim verification')
     const claims = (parsed.claims ?? []).map(c => ({
       claim: c.claim ?? '',
       excerpt: c.excerpt ?? '',

@@ -199,12 +199,28 @@ ${'='.repeat(72)}`)
   console.log('='.repeat(72))
 
   for (const entry of dryRunReport) {
-    const { outcome, result } = entry
-    const mark = outcome === 'rejected' ? 'x' : 'v'
+    const { outcome, result, cluster, reason } = entry
     console.log(`
 ${rule}`)
+
+    // Skipped and errored clusters never reach the gate, so they have no
+    // article to describe - but leaving them out of the report, as the first
+    // pilot did, makes three clusters look like one.
+    if (!result) {
+      console.log(`[-] ${outcome.toUpperCase()} - "${cluster?.topicLabel ?? 'unknown cluster'}"`)
+      console.log(`   ${reason}`)
+      continue
+    }
+
+    const mark = outcome === 'rejected' ? 'x' : outcome === 'skipped' ? '-' : 'v'
     console.log(`[${mark}] ${outcome.toUpperCase()} - "${result.article.headline}"`)
     console.log(`   cluster: ${result.topicLabel} (${result.outletCount} outlets)`)
+    if (reason) console.log(`   ${reason}`)
+
+    // Which reviewer actually ran matters: a silent fallback means one model
+    // checked this article, not two.
+    console.log(`   fact-check by: ${result.grokReview?.reviewer ?? 'unknown'}` +
+      ` (score ${result.grokReview?.overallScore ?? 'n/a'}/10)`)
 
     const v = result.verification ?? {}
     console.log(`   verification: ${v.status ?? 'n/a'}` +
@@ -233,11 +249,13 @@ ${rule}`)
     }
   }
 
-  const wouldPublish = dryRunReport.filter(e => e.outcome !== 'rejected').length
-  const rejected = dryRunReport.filter(e => e.outcome === 'rejected').length
+  const tally = dryRunReport.reduce((acc, e) => ({ ...acc, [e.outcome]: (acc[e.outcome] ?? 0) + 1 }), {})
+  const counted = Object.values(tally).reduce((a, b) => a + b, 0)
   console.log(`
 ${'='.repeat(72)}`)
-  console.log(`   ${wouldPublish} would publish, ${rejected} blocked by the gate, out of ${processed} candidate(s)`)
+  console.log(`   ${processed} cluster(s) processed:`)
+  for (const [outcome, n] of Object.entries(tally)) console.log(`     ${String(n).padStart(3)}  ${outcome}`)
+  if (counted < processed) console.log(`     ${String(processed - counted).padStart(3)}  unaccounted for`)
   console.log('='.repeat(72))
 }
 
@@ -317,6 +335,7 @@ async function main() {
     // story, before spending a full write/review/validate cycle on it.
     if (isDuplicateStory(cluster.topicLabel, publishedTexts)) {
       console.log(`   ⎘ Skipping "${cluster.topicLabel}" — same event as an already-published story`)
+      if (DRY_RUN) dryRunReport.push({ outcome: 'skipped', reason: 'same event as an already-published story', cluster })
       continue
     }
 
@@ -364,6 +383,7 @@ async function main() {
 
         if (!developed) {
           console.log(`   ⎘ Nothing materially new since ${prior.date} — backfilling with next-ranked story`)
+          if (DRY_RUN) dryRunReport.push({ outcome: 'skipped', reason: `nothing materially new since ${prior.date}`, cluster, result })
           continue
         }
 
@@ -400,6 +420,7 @@ async function main() {
       )
     } catch (err) {
       console.error(`   ❌ Failed for "${cluster.topicLabel}": ${err.message} — backfilling`)
+      if (DRY_RUN) dryRunReport.push({ outcome: 'errored', reason: err.message, cluster })
       // Continue with remaining clusters
     }
   }
