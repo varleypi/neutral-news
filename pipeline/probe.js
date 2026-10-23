@@ -23,6 +23,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
 const { client, VERIFIER_MODEL, webSearchTool } = require('./claude')
+const { writeDraft } = require('./write')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
 const { evaluateGate } = require('./gate')
@@ -215,6 +216,40 @@ async function probeSchema() {
   }
 }
 
+/**
+ * One call, on the combination with the least evidence behind it.
+ *
+ * The writer is the only stage that uses server-side search AND a schema in
+ * anger, and the probe that established the two compose came back
+ * schema-shaped and wrong. So this asks the end-to-end question instead of the
+ * API one: given the same cluster that produced the 10/19 article, does a
+ * searching writer still assert that SpaceX is privately held?
+ */
+async function probeDraft() {
+  const draft = await writeDraft(SPACEX_CLUSTER, { date: PROBE_DATE })
+
+  if (!draft.headline || !draft.body) {
+    return { ok: false, detail: `draft came back malformed: ${JSON.stringify(draft).slice(0, 160)}` }
+  }
+
+  const text = `${draft.body} ${(draft.keyFacts ?? []).join(' ')}`
+  const stale = /privately held|not (?:publicly )?traded|do(?:es)? not trade on public markets|remains private/i.exec(text)
+
+  if (stale) {
+    return {
+      ok: false,
+      detail: `the writer still asserted stale ownership: "${stale[0]}" ` +
+        `(${draft.researchSources?.length ?? 0} source(s) consulted) - the gate would have to catch this downstream`,
+    }
+  }
+
+  return {
+    ok: true,
+    detail: `"${draft.headline}" - ${draft.researchSources?.length ?? 0} source(s) consulted, ` +
+      `${draft.keyFacts?.length ?? 0} key fact(s), no stale ownership claim`,
+  }
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
 
 const PROBES = {
@@ -222,6 +257,7 @@ const PROBES = {
   verify: { run: probeVerify, cost: '1 call' },
   grok: { run: probeGrok, cost: '1 call' },
   schema: { run: probeSchema, cost: '1 call' },
+  draft: { run: probeDraft, cost: '1 call' },
 }
 
 async function main() {
