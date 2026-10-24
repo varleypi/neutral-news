@@ -23,7 +23,7 @@ const {
   ARTICLE_SCHEMA,
   CORRECTIONS_SCHEMA,
 } = require('./claude')
-const { applyResolutions, pruneKeyFacts } = require('./corrections')
+const { applyResolutions, pruneKeyFacts, supersededExcerpts } = require('./corrections')
 
 // Drafting and revision are writing tasks, not reasoning tasks: the research is
 // done by search, not by thinking harder. Medium effort keeps them from
@@ -227,7 +227,10 @@ Searching is available; use it for any "replace" or "keep".`
 
   // The model's instructions; our edits.
   const { body, applied } = applyResolutions(article.body, resolutions.filter(r => r.action !== 'keep'))
-  const removed = resolutions.filter(r => r.action === 'delete').map(r => r.excerpt)
+  // A replacement supersedes the original claim just as a deletion does, so a
+  // key fact restating either has to go. Pruning only on deletions left the
+  // probe with a corrected body beside an uncorrected key fact.
+  const superseded = supersededExcerpts(applied)
   const addedRefs = resolutions
     .filter(r => r.action === 'keep' && String(r.reference ?? '').trim())
     .map(r => r.reference.trim())
@@ -235,7 +238,7 @@ Searching is available; use it for any "replace" or "keep".`
   const corrected = {
     ...article,
     body,
-    keyFacts: pruneKeyFacts(article.keyFacts ?? [], removed),
+    keyFacts: pruneKeyFacts(article.keyFacts ?? [], superseded),
     references: [...new Set([...(article.references ?? []), ...addedRefs])],
   }
 

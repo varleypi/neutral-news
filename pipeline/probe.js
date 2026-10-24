@@ -273,13 +273,22 @@ async function probeCorrections() {
   const { article, applied, unresolved } = await applyCorrections(SPACEX_ARTICLE, [issue], { date: PROBE_DATE })
 
   const text = `${article.body} ${(article.keyFacts ?? []).join(' ')}`
-  const survived = /privately held|do(?:es)? not trade on public markets|remains private/i.exec(text)
+
+  // Look for the falsehood, not the words. "SpaceX was privately held until it
+  // listed in June 2026" is a correct sentence that contains the phrase; only
+  // the present tense is wrong.
+  const survived = /(?:is|remains|stays)\s+privately\s+held|shares\s+do\s+not\s+trade|is\s+not\s+publicly\s+traded/i.exec(text)
+
+  const how = applied.map(a => `${a.action}${a.ok ? '' : ` FAILED(${a.reason})`}`).join(', ') || 'no resolutions'
 
   if (survived) {
     return {
       ok: false,
-      detail: `the flagged claim survived the correction: "${survived[0]}" ` +
-        `(applied: ${JSON.stringify(applied.map(a => ({ ok: a.ok, reason: a.reason })))})`,
+      detail: [
+        `the claim survived as "${survived[0]}" [${how}]`,
+        `       body: ${article.body.replace(/\s+/g, ' ').slice(0, 200)}`,
+        `       keyFacts: ${JSON.stringify(article.keyFacts)}`,
+      ].join('\n'),
     }
   }
 
@@ -287,10 +296,9 @@ async function probeCorrections() {
     return { ok: false, detail: `${unresolved.length} required issue(s) left unresolved` }
   }
 
-  const action = applied[0]?.action ?? 'keep'
   return {
     ok: true,
-    detail: `flagged claim gone (action: ${action}); ` +
+    detail: `flagged claim gone [${how}]; ` +
       `body ${SPACEX_ARTICLE.body.length} -> ${article.body.length} chars, ` +
       `keyFacts ${SPACEX_ARTICLE.keyFacts.length} -> ${article.keyFacts.length}`,
   }

@@ -189,8 +189,27 @@ function pruneKeyFacts(keyFacts = [], removedExcerpts = []) {
   })
 }
 
+/**
+ * Excerpts whose claim no longer stands, taken from what actually applied.
+ *
+ * Both a deletion and a replacement supersede the original claim, and key
+ * facts restating either must go with it. Getting this wrong is how the
+ * correction step shipped a corrected body beside an uncorrected key fact -
+ * the same two-places failure as the article that started all this, where
+ * "SpaceX is privately held" appeared in the body and again in keyFacts.
+ *
+ * Driven by the applied report rather than the requested resolutions, so a
+ * resolution that failed to match cannot prune anything.
+ */
+function supersededExcerpts(applied = []) {
+  return applied
+    .filter(a => a.ok && (a.action === 'delete' || a.action === 'replace'))
+    .map(a => a.excerpt)
+}
+
 module.exports = {
   applyResolutions,
+  supersededExcerpts,
   pruneKeyFacts,
   locateExcerpt,
   splitSentences,

@@ -16,6 +16,7 @@ const assert = require('node:assert')
 const {
   applyResolutions,
   pruneKeyFacts,
+  supersededExcerpts,
   locateExcerpt,
   splitSentences,
   matchScore,
@@ -168,6 +169,40 @@ test('a key fact restating a removed passage goes with it', () => {
 test('unrelated key facts are left alone', () => {
   const keyFacts = ['The court granted certiorari.', 'Sentencing has not yet occurred.']
   assert.deepEqual(pruneKeyFacts(keyFacts, [SPACEX_EXCERPT]), keyFacts)
+})
+
+test('a replacement supersedes the claim, so its key fact goes too', () => {
+  // The probe caught this live: the body was corrected properly and the key
+  // fact restating the old claim stayed, leaving the falsehood on the page in
+  // the more prominent of the two places - the same two-places failure as the
+  // article that started all of this.
+  const { applied } = applyResolutions(SPACEX_BODY, [{
+    excerpt: SPACEX_EXCERPT,
+    action: 'replace',
+    replacement: 'SpaceX listed on Nasdaq in June 2026 and trades as SPCX.',
+  }])
+
+  const superseded = supersededExcerpts(applied)
+  const pruned = pruneKeyFacts([
+    'Musk said he will give one SpaceX share to each child in the US.',
+    'SpaceX is privately held; shares do not trade on public markets.',
+  ], superseded)
+
+  assert.equal(pruned.length, 1)
+  assert.ok(!/privately held/i.test(pruned.join(' ')))
+})
+
+test('supersededExcerpts ignores resolutions that did not apply', () => {
+  // A resolution that matched nothing must not prune a key fact: the body
+  // still says whatever it said.
+  const { applied } = applyResolutions(SPACEX_BODY, [
+    { excerpt: 'a passage that is nowhere in this article, about home distilling', action: 'delete' },
+  ])
+  assert.deepEqual(supersededExcerpts(applied), [])
+})
+
+test('a kept passage supersedes nothing', () => {
+  assert.deepEqual(supersededExcerpts([{ excerpt: 'x', action: 'keep', ok: true }]), [])
 })
 
 // ── Primitives ───────────────────────────────────────────────────────────────
