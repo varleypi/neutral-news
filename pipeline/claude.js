@@ -258,6 +258,28 @@ const VALIDATION_SCHEMA = object({
   reviewedAt: { type: 'string' },
 })
 
+/**
+ * One resolution per flagged passage - the correction step's whole output.
+ *
+ * Deliberately NOT an article. Asking for the rewritten article back is what
+ * produced the 2026-10-24 edition, where the writer returned the original
+ * verbatim twice in a row and one story out of twelve published. The model
+ * decides what should happen to each passage; ./corrections.js performs it, so
+ * "the flagged text is still there" stops being a possible outcome.
+ */
+const CORRECTIONS_SCHEMA = object({
+  resolutions: {
+    type: 'array',
+    items: object({
+      excerpt: { type: 'string' },
+      action: { type: 'string', enum: ['delete', 'replace', 'keep'] },
+      replacement: { type: 'string' },
+      reference: { type: 'string' },
+      reasoning: { type: 'string' },
+    }),
+  },
+})
+
 module.exports = {
   client,
   complete,
@@ -275,4 +297,5 @@ module.exports = {
   ARTICLE_SCHEMA,
   REVIEW_SCHEMA,
   VALIDATION_SCHEMA,
+  CORRECTIONS_SCHEMA,
 }

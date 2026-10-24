@@ -21,12 +21,18 @@ const {
   parseSearchResponse,
   WRITER_MODEL,
   ARTICLE_SCHEMA,
+  CORRECTIONS_SCHEMA,
 } = require('./claude')
+const { applyResolutions, pruneKeyFacts } = require('./corrections')
 
 // Drafting and revision are writing tasks, not reasoning tasks: the research is
 // done by search, not by thinking harder. Medium effort keeps them from
 // dominating the run's wall-clock, which in the first pilot they did.
 const WRITE_EFFORT = process.env.CLAUDE_WRITE_EFFORT || 'medium'
+
+// Corrections are precision work on specific sentences, not composition, and
+// getting them wrong costs a whole candidate. Worth more effort than drafting.
+const CORRECT_EFFORT = process.env.CLAUDE_CORRECT_EFFORT || 'high'
 
 // Set WRITER_SEARCH=off to fall back to master's non-searching writer - the
 // cheaper shape, at the cost of the stage that was inventing background.
@@ -125,50 +131,6 @@ RESPOND WITH JSON ONLY, as the last thing in your reply:
 }`
 }
 
-function buildRevisionPrompt(draft, critique, today) {
-  return `Today's date is ${today}. Revise this news article based on the fact-checker's critique below.
-
-ORIGINAL ARTICLE:
-Headline: ${draft.headline}
-Body:
-${draft.body}
-
-Key facts asserted:
-${(draft.keyFacts ?? []).map(f => `- ${f}`).join('\n') || '- none listed'}
-
-FACT-CHECKER CRITIQUE:
-${critique}
-
-HOW TO APPLY IT:
-Every correction marked "required" must actually be applied. There are two honest ways to
-apply one, and only two:
-  • Remove or rewrite the flagged text so the problem is gone.
-  • Confirm it by search and add the source to the references list.
-
-Arguing that a flagged claim is well known is not a third option. Your confidence in a
-background fact is not evidence for it, and the check downstream compares the critique
-against the article text — a required correction left in place costs the story its slot, so
-there is nothing to be gained by leaving it. When in doubt, cut the sentence: the article
-does not need it.
-
-For corrections marked "suggested", use your judgment to improve the piece without
-introducing new inaccuracies.
-
-Preserve the flowing, readable narrative voice (Cronkite/Baron/Brooks) — do not revert to a
-stilted wire style with an attribution on every line. Keep sourcing in the references list,
-not scattered through the body.
-
-Respond with JSON only (same schema as before), as the last thing in your reply:
-{
-  "headline": "...",
-  "summary": "...",
-  "body": "...",
-  "keyFacts": ["...", "...", "..."],
-  "references": ["Outlet — what it supports", "..."],
-  "sourcesUsed": ["..."]
-}`
-}
-
 async function writeDraft(cluster, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
@@ -194,32 +156,106 @@ async function writeDraft(cluster, { date } = {}) {
   return { ...draft, researchSources: sources }
 }
 
-async function reviseWithCritique(draft, critique, { date } = {}) {
+/**
+ * Apply the required corrections - by deciding, not by rewriting.
+ *
+ * The model is asked for one resolution per flagged passage and nothing else.
+ * It never sees an instruction to "return the revised article", because that
+ * is the instruction it answered by returning the original: on 2026-10-24 the
+ * writer was handed four required corrections, sent back the article verbatim,
+ * was shown the exact passages that had not moved, and sent it back verbatim
+ * again. Twelve candidates, one published.
+ *
+ * ./corrections.js performs the edits, so a passage marked for deletion is
+ * gone whatever the model would have preferred, and a resolution that does not
+ * match any sentence is reported here rather than discovered by the validator
+ * three paid stages downstream.
+ */
+async function applyCorrections(article, requiredIssues, { date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
-  console.log(`   Revising article based on fact-check critique...`)
+  if (requiredIssues.length === 0) return { article, applied: [], unresolved: [] }
 
-  if (!WRITER_SEARCHES) {
-    const text = await complete({ system: SYSTEM_PROMPT, prompt: buildRevisionPrompt(draft, critique, today), maxTokens: 3000, schema: ARTICLE_SCHEMA })
-    const revised = JSON.parse(text)
-    console.log(`   Revised: "${revised.headline}"`)
-    return revised
-  }
+  console.log(`   Applying ${requiredIssues.length} required correction(s)...`)
 
-  const { content, stopReason, sources } = await completeWithSearch({
+  const issueList = requiredIssues
+    .map((i, n) => `${n + 1}. [${i.type}] "${i.excerpt}"\n   why it was flagged: ${i.correction}`)
+    .join('\n\n')
+
+  const prompt = `Today's date is ${today}. A fact-checker has flagged passages in this article.
+Decide what happens to each one. You are NOT rewriting the article - you are issuing one
+instruction per passage, and those instructions will be applied to the text mechanically.
+
+ARTICLE BODY:
+${article.body}
+
+REFERENCES currently cited:
+${(article.references ?? []).map((r, n) => `[R${n + 1}] ${r}`).join('\n') || 'None'}
+
+FLAGGED PASSAGES:
+${issueList}
+
+For each flagged passage choose exactly one action:
+
+  "delete"  - cut it. Choose this whenever you cannot source the claim. An article is
+              better short than wrong, and a deleted sentence costs nothing; an unsourced
+              one costs the whole story.
+  "replace" - the claim is salvageable if restated accurately. Put the corrected sentence
+              in "replacement". Search first and make it true as of ${today}. Write a
+              complete sentence in the article's voice: it is dropped in where the old one
+              was, so it has to read naturally beside its neighbours.
+  "keep"    - the passage is right as it stands AND you can name a source. Put the source
+              in "reference", as an outlet plus what it supports. Only use this when you
+              have actually confirmed it; your own confidence is not a source, and a "keep"
+              without real backing fails the article later just as surely as leaving the
+              passage alone would.
+
+Copy each "excerpt" back exactly as it appears in the FLAGGED PASSAGES list, so the right
+sentence is found. Give one resolution per flagged passage - all ${requiredIssues.length} of them.
+
+Searching is available; use it for any "replace" or "keep".`
+
+  const { content, stopReason } = await completeWithSearch({
     model: WRITER_MODEL,
     system: SYSTEM_PROMPT,
-    prompt: buildRevisionPrompt(draft, critique, today),
-    maxUses: 6,
-    effort: WRITE_EFFORT,
-    schema: ARTICLE_SCHEMA,
+    prompt,
+    maxUses: 8,
+    effort: CORRECT_EFFORT,
+    schema: CORRECTIONS_SCHEMA,
   })
 
-  const revised = parseSearchResponse(content, stopReason, 'Revision')
-  const allSources = [...new Set([...(draft.researchSources ?? []), ...sources])]
-  console.log(`   Revised: "${revised.headline}"`)
-  return { ...revised, researchSources: allSources }
-  console.log(`   Revised: "${revised.headline}"`)
-  return { ...revised, researchSources: sources }
+  const { resolutions = [] } = parseSearchResponse(content, stopReason, 'Corrections')
+
+  // The model's instructions; our edits.
+  const { body, applied } = applyResolutions(article.body, resolutions.filter(r => r.action !== 'keep'))
+  const removed = resolutions.filter(r => r.action === 'delete').map(r => r.excerpt)
+  const addedRefs = resolutions
+    .filter(r => r.action === 'keep' && String(r.reference ?? '').trim())
+    .map(r => r.reference.trim())
+
+  const corrected = {
+    ...article,
+    body,
+    keyFacts: pruneKeyFacts(article.keyFacts ?? [], removed),
+    references: [...new Set([...(article.references ?? []), ...addedRefs])],
+  }
+
+  // A flagged passage with no resolution, or one whose resolution did not
+  // match any sentence, is still in the article. Say so now - it is free.
+  const resolvedExcerpts = new Set(applied.filter(a => a.ok).map(a => a.excerpt))
+  const kept = new Set(resolutions.filter(r => r.action === 'keep').map(r => r.excerpt))
+  const unresolved = requiredIssues.filter(i =>
+    !resolvedExcerpts.has(i.excerpt) && !kept.has(i.excerpt) &&
+    !applied.some(a => a.ok && a.excerpt === i.excerpt)
+  )
+
+  const counts = resolutions.reduce((acc, r) => ({ ...acc, [r.action]: (acc[r.action] ?? 0) + 1 }), {})
+  console.log(
+    `   Corrections: ${counts.delete ?? 0} deleted, ${counts.replace ?? 0} replaced, ${counts.keep ?? 0} kept with a source` +
+    (applied.some(a => !a.ok) ? ` - ${applied.filter(a => !a.ok).length} could not be located` : '')
+  )
+  for (const a of applied.filter(a => !a.ok)) console.log(`     ! ${a.reason}: "${String(a.excerpt).slice(0, 80)}"`)
+
+  return { article: corrected, applied, unresolved }
 }
 
-module.exports = { writeDraft, reviseWithCritique }
+module.exports = { writeDraft, applyCorrections }

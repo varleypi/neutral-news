@@ -23,7 +23,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
 const { client, VERIFIER_MODEL, webSearchTool } = require('./claude')
-const { writeDraft } = require('./write')
+const { writeDraft, applyCorrections } = require('./write')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
 const { evaluateGate } = require('./gate')
@@ -250,6 +250,52 @@ async function probeDraft() {
   }
 }
 
+/**
+ * One call, on the failure that cost the 2026-10-24 edition.
+ *
+ * Eight of twelve candidates were blocked that day, and the validator's
+ * refrain was the same each time: "None of the four REQUIRED fixes were
+ * applied; all flagged passages remain verbatim in the article." Asking for a
+ * rewrite got the original back, twice.
+ *
+ * So: hand the correction step the published SpaceX article and the required
+ * issue that was raised against it, and check the article afterwards. Not the
+ * model's account of what it did - the text.
+ */
+async function probeCorrections() {
+  const issue = {
+    type: 'UNVERIFIABLE',
+    severity: 'required',
+    excerpt: SPACEX_EXCERPT,
+    correction: 'SpaceX is publicly traded on Nasdaq as SPCX since June 2026. Remove or correct this.',
+  }
+
+  const { article, applied, unresolved } = await applyCorrections(SPACEX_ARTICLE, [issue], { date: PROBE_DATE })
+
+  const text = `${article.body} ${(article.keyFacts ?? []).join(' ')}`
+  const survived = /privately held|do(?:es)? not trade on public markets|remains private/i.exec(text)
+
+  if (survived) {
+    return {
+      ok: false,
+      detail: `the flagged claim survived the correction: "${survived[0]}" ` +
+        `(applied: ${JSON.stringify(applied.map(a => ({ ok: a.ok, reason: a.reason })))})`,
+    }
+  }
+
+  if (unresolved.length > 0) {
+    return { ok: false, detail: `${unresolved.length} required issue(s) left unresolved` }
+  }
+
+  const action = applied[0]?.action ?? 'keep'
+  return {
+    ok: true,
+    detail: `flagged claim gone (action: ${action}); ` +
+      `body ${SPACEX_ARTICLE.body.length} -> ${article.body.length} chars, ` +
+      `keyFacts ${SPACEX_ARTICLE.keyFacts.length} -> ${article.keyFacts.length}`,
+  }
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
 
 const PROBES = {
@@ -258,6 +304,7 @@ const PROBES = {
   grok: { run: probeGrok, cost: '1 call' },
   schema: { run: probeSchema, cost: '1 call' },
   draft: { run: probeDraft, cost: '1 call' },
+  corrections: { run: probeCorrections, cost: '1 call' },
 }
 
 async function main() {
