@@ -23,7 +23,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 24, not 20: the test script globs test files and the lib suites are
+          # TypeScript. Node 20 supports neither, so `npm test` there fails
+          # before running a single test - which is how it failed the first
+          # time this workflow ran. daily-pipeline.yml is still on 20; it runs
+          # no tests, but the two should be aligned before long.
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
