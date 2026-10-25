@@ -155,6 +155,7 @@ async function verifyClaims(article, cluster, { date } = {}) {
       prompt: buildVerifyPrompt(article, cluster, today),
       maxUses: Number(process.env.VERIFY_MAX_SEARCHES) || 24,
       effort: VERIFY_EFFORT,
+      stage: 'verify',
     })
 
     const searchErrors = collectSearchErrors(content)

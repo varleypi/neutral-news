@@ -28,7 +28,8 @@ const { writeDraft, applyCorrections } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
 const { verifyClaims, verificationIssues } = require('./verify')
 const { evaluateGate, describeBlockers, excerptStillPresent } = require('./gate')
-const { storeArticles, updateArticleInPlace, logError, hasSuccessfulRun } = require('./store')
+const { usageReport } = require('./claude')
+const { storeArticles, updateArticleInPlace, logError, hasAttemptedRun } = require('./store')
 const { postDailyThread } = require('./social')
 const {
   getRecentlyPublished,
@@ -296,16 +297,18 @@ async function main() {
   const startTime = Date.now()
 
   // The dispatch from SpinDetector and the backup cron can both fire on the same
-  // day; each full run costs dozens of Claude calls, so only the first one works.
+  // day, and a full run is well over a hundred model calls, so only the first
+  // attempt works. Counts failed attempts too: on 2026-10-24 the first run
+  // failed after three hours and the backup then ran the same clusters again.
   if (process.env.FORCE_RUN !== 'true' && !DRY_RUN) {
     let alreadyRan = false
     try {
-      alreadyRan = await hasSuccessfulRun(date)
+      alreadyRan = await hasAttemptedRun(date)
     } catch (err) {
       console.warn(`   ⚠ ${err.message} — running anyway`)
     }
     if (alreadyRan) {
-      console.log(`\n⏭  The ${date} edition was already generated — skipping (set FORCE_RUN=true to regenerate)`)
+      console.log(`\n⏭  The ${date} edition was already attempted — skipping (set FORCE_RUN=true to regenerate)`)
       return
     }
   }
@@ -463,6 +466,8 @@ async function main() {
   // below are exactly the ones that must not run.
   if (DRY_RUN) {
     printDryRunReport(date, processed, (Date.now() - startTime) / 1000)
+    console.log('')
+    usageReport().forEach(l => console.log('   ' + l))
     return
   }
 
@@ -501,6 +506,9 @@ async function main() {
   } catch (err) {
     console.warn(`   ⚠ X post failed: ${err.message} — continuing`)
   }
+
+  console.log('')
+  usageReport().forEach(l => console.log('   ' + l))
 
   const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1)
   console.log(`\n✅ Pipeline complete in ${totalElapsed}s`)

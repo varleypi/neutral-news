@@ -136,7 +136,7 @@ async function writeDraft(cluster, { date } = {}) {
   console.log(`   Writing draft for: "${cluster.topicLabel}"`)
 
   if (!WRITER_SEARCHES) {
-    const text = await complete({ system: SYSTEM_PROMPT, prompt: buildDraftPrompt(cluster, today), maxTokens: 3000, schema: ARTICLE_SCHEMA })
+    const text = await complete({ system: SYSTEM_PROMPT, prompt: buildDraftPrompt(cluster, today), maxTokens: 3000, schema: ARTICLE_SCHEMA, stage: 'draft' })
     const draft = JSON.parse(text)
     console.log(`   Draft written: "${draft.headline}"`)
     return draft
@@ -149,6 +149,7 @@ async function writeDraft(cluster, { date } = {}) {
     maxUses: 6,
     effort: WRITE_EFFORT,
     schema: ARTICLE_SCHEMA,
+    stage: 'draft',
   })
 
   const draft = parseSearchResponse(content, stopReason, 'Draft')
@@ -221,6 +222,7 @@ Searching is available; use it for any "replace" or "keep".`
     maxUses: 8,
     effort: CORRECT_EFFORT,
     schema: CORRECTIONS_SCHEMA,
+    stage: 'corrections',
   })
 
   const { resolutions = [] } = parseSearchResponse(content, stopReason, 'Corrections')

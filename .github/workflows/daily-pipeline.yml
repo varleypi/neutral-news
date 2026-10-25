@@ -21,6 +21,15 @@ on:
         description: 'Stop after this many candidate clusters (blank = no cap). Keeps a pilot cheap.'
         required: false
 
+# One edition at a time. On 2026-10-24 the SpinDetector dispatch and the backup
+# cron both ran in full and overlapped by 41 minutes - roughly six hours of
+# model calls that produced one article between them. The in-process guard
+# cannot catch that: it checks the database at startup, and at startup the
+# other run has not recorded anything yet.
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
 jobs:
   generate-articles:
     runs-on: ubuntu-latest

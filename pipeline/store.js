@@ -157,12 +157,23 @@ async function updateArticleInPlace({ articleId, result }) {
   if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`)
 }
 
-async function hasSuccessfulRun(date) {
+/**
+ * Has a full attempt already been made for this date?
+ *
+ * Deliberately counts failures as well as successes. A run that spent three
+ * hours of model calls and then exited because nothing cleared the gate has
+ * still cost what it cost, and re-running the same clusters an hour later
+ * mostly buys the same answer again - which is exactly what happened on
+ * 2026-10-24, at roughly double the day's bill for one article.
+ *
+ * A manual dispatch sets FORCE_RUN and bypasses this, so a deliberate retry
+ * after a fix is always available.
+ */
+async function hasAttemptedRun(date) {
   const { count, error } = await getSupabase()
     .from('neutral_pipeline_runs')
     .select('*', { count: 'exact', head: true })
     .eq('date', date)
-    .eq('status', 'success')
   if (error) throw new Error(`checking earlier runs for ${date} failed: ${error.message}`)
   return count > 0
 }
@@ -181,4 +192,4 @@ async function logError(date, message) {
   }
 }
 
-module.exports = { storeArticles, updateArticleInPlace, logError, hasSuccessfulRun }
+module.exports = { storeArticles, updateArticleInPlace, logError, hasAttemptedRun }

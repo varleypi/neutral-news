@@ -21,6 +21,7 @@ const {
   completeWithSearch,
   parseSearchResponse,
   extractJson,
+  recordUsage,
   TIMEOUT_MS,
   VALIDATOR_MODEL,
   WRITER_MODEL,
@@ -162,7 +163,9 @@ async function grokReview(draft, cluster, { date } = {}) {
       }
       throw new Error(`xAI API ${response.status}: ${body}`)
     }
-    parsed = parseXaiResponse(await response.json())
+    const json = await response.json()
+    recordUsage('review-grok', GROK_MODEL, json.usage ?? {})
+    parsed = parseXaiResponse(json)
   } catch (err) {
     console.warn(`   ⚠ Grok review failed: ${err.message} — falling back to Claude review`)
     return claudeFallbackReview(draft, today)
@@ -225,6 +228,7 @@ RESPOND WITH JSON ONLY, as the last thing in your reply:
       prompt,
       maxUses: 6,
       schema: REVIEW_SCHEMA,
+      stage: 'review-fallback',
     })
 
     const result = parseSearchResponse(content, stopReason, 'Fallback review')
@@ -365,6 +369,7 @@ RESPOND WITH JSON ONLY:
       prompt,
       maxTokens: 4000,
       schema: VALIDATION_SCHEMA,
+      stage: 'validate',
     })
 
     const validation = extractJson(raw)

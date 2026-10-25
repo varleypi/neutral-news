@@ -23,7 +23,7 @@ const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || VALIDATOR_MODEL
 // Structured outputs guarantee parseable JSON: without them Sonnet emits raw
 // newlines inside the article body string, which JSON.parse rejects.
 // Thinking is off because these max_tokens budgets assume no thinking.
-async function complete({ model = WRITER_MODEL, system, prompt, maxTokens, schema }) {
+async function complete({ model = WRITER_MODEL, system, prompt, maxTokens, schema, stage = 'other' }) {
   const response = await client.messages.create({
     model,
     max_tokens: maxTokens,
@@ -32,6 +32,7 @@ async function complete({ model = WRITER_MODEL, system, prompt, maxTokens, schem
     system,
     messages: [{ role: 'user', content: prompt }],
   })
+  recordUsage(stage, model, response.usage)
   return response.content
     .filter(block => block.type === 'text')
     .map(block => block.text)
@@ -39,6 +40,59 @@ async function complete({ model = WRITER_MODEL, system, prompt, maxTokens, schem
 }
 
 // ── Stages that need the live web ────────────────────────────────────────────
+
+// ── What a run costs ────────────────────────────────────────────────
+// Nothing recorded token usage, so every statement anyone made about where the
+// bill went - including mine - was inferred from how many sources a stage
+// retrieved. A run now prints what it actually spent, per stage.
+
+const PRICES = {
+  'claude-opus-4-8': { input: 5, output: 25 },
+  'claude-opus-5-5': { input: 4, output: 20 },
+  'claude-sonnet-5': { input: 2, output: 10 },
+  'claude-sonnet-5-5': { input: 2, output: 10 },
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
+  'grok-4.7': { input: 2, output: 6 },
+}
+
+const spend = new Map()
+
+/** Record one call. `usage` is the provider's own usage object. */
+function recordUsage(stage, model, usage = {}) {
+  const key = `${stage}|${model}`
+  const row = spend.get(key) ?? { stage, model, calls: 0, input: 0, output: 0, cached: 0 }
+  row.calls += 1
+  row.input += usage.input_tokens ?? usage.prompt_tokens ?? 0
+  row.output += usage.output_tokens ?? usage.completion_tokens ?? 0
+  row.cached += usage.cache_read_input_tokens ?? 0
+  spend.set(key, row)
+}
+
+function rowCost(r) {
+  const p = PRICES[r.model]
+  if (!p) return null
+  return (r.input / 1e6) * p.input + (r.output / 1e6) * p.output
+}
+
+/** Lines for the end of a run, dearest stage first. */
+function usageReport() {
+  const rows = [...spend.values()].sort((a, b) => (rowCost(b) ?? 0) - (rowCost(a) ?? 0))
+  if (rows.length === 0) return ['No model calls recorded']
+  const out = ['stage                model             calls      input     output      ~cost']
+  let total = 0
+  for (const r of rows) {
+    const c = rowCost(r)
+    if (c !== null) total += c
+    out.push(
+      r.stage.padEnd(20) + r.model.padEnd(18) +
+      String(r.calls).padStart(5) + String(r.input).padStart(11) + String(r.output).padStart(11) +
+      (c === null ? '          ?' : ('$' + c.toFixed(2)).padStart(11))
+    )
+  }
+  out.push(`${''.padEnd(38)}${String([...spend.values()].reduce((a, r) => a + r.calls, 0)).padStart(5)}${''.padStart(22)}${('$' + total.toFixed(2)).padStart(11)}`)
+  out.push('(estimate: list prices, no discounts or cache pricing applied)')
+  return out
+}
 
 /** The server-side web search tool. */
 function webSearchTool(maxUses) {
@@ -73,6 +127,7 @@ async function completeWithSearch({
   maxUses = 8,
   effort,
   schema,
+  stage = 'other',
   maxLegs = 4,
 }) {
   const outputConfig = { ...(effort ? { effort } : {}), ...(schema ? { format: { type: 'json_schema', schema } } : {}) }
@@ -92,6 +147,7 @@ async function completeWithSearch({
   // resuming means handing the assistant's own content back.
   for (let leg = 0; leg < maxLegs; leg++) {
     const response = await client.messages.create({ ...params, messages })
+    recordUsage(stage, model, response.usage)
     all.push(...response.content)
     if (response.stop_reason !== 'pause_turn') {
       return { content: all, stopReason: response.stop_reason, sources: collectSearchSources(all) }
@@ -290,6 +346,8 @@ module.exports = {
   extractJson,
   parseSearchResponse,
   webSearchTool,
+  recordUsage,
+  usageReport,
   TIMEOUT_MS,
   WRITER_MODEL,
   VALIDATOR_MODEL,
