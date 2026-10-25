@@ -10,7 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       probes:
-        description: 'Which probes to run: gate, verify, grok (space-separated; blank = all).'
+        description: 'Which probes to run: gate, verify, grok, draft, corrections, schema (space-separated; blank = all).'
+        required: false
+      verifier_model:
+        description: 'Override the verifier model, e.g. claude-sonnet-5. Blank = default.'
+        required: false
+      verify_max_searches:
+        description: 'Override the verifier search budget. Blank = default (24).'
         required: false
 
 jobs:
@@ -42,4 +48,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          # So a cheaper configuration can be tried for one call instead of
+          # being argued about, or worse, shipped and measured in production.
+          CLAUDE_VERIFIER_MODEL: ${{ github.event.inputs.verifier_model }}
+          VERIFY_MAX_SEARCHES: ${{ github.event.inputs.verify_max_searches }}
         run: node pipeline/probe.js ${{ github.event.inputs.probes }}
