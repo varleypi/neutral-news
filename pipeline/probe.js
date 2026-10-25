@@ -127,9 +127,10 @@ async function probeVerify() {
     }
   }
 
+  const config = `${VERIFIER_MODEL}, budget ${Number(process.env.VERIFY_MAX_SEARCHES) || 24}, ${verification.sourcesRetrieved?.length ?? 0} sources`
   return {
     ok: true,
-    detail: `caught it — "${caught.evidence}"\n       sources: ${(caught.sources ?? []).join(', ') || 'none cited'}`,
+    detail: `caught it [${config}] — "${caught.evidence}"`,
   }
 }
 
