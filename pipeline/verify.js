@@ -144,16 +144,17 @@ async function verifyClaims(article, cluster, { date } = {}) {
     // the one call that measured search-plus-schema came back schema-shaped
     // and wrong.
     //
-    // maxUses 8 was starvation. The second pilot hit "search access was
-    // exhausted" five times on a 19-claim article, and every starved claim
-    // came back UNVERIFIED - which the pipeline read as a factual problem and
-    // spent a revision, a re-check and a retry on. Giving this stage enough
-    // searches the first time is the cheapest fix in the system.
+    // 8 starved: the second pilot hit "search access was exhausted" five
+    // times, and every starved claim came back UNVERIFIED, which the pipeline
+    // read as a factual problem and spent a revision and a retry on. 24 fixed
+    // that completely - zero exhausted, zero unchecked - but pulled 58 to 178
+    // sources per call into context, which is what made this stage expensive.
+    // 14 sits between the two and still caught the canonical stale fact.
     const { content, stopReason, sources: retrieved } = await completeWithSearch({
       model: VERIFIER_MODEL,
       system: VERIFY_SYSTEM,
       prompt: buildVerifyPrompt(article, cluster, today),
-      maxUses: Number(process.env.VERIFY_MAX_SEARCHES) || 24,
+      maxUses: Number(process.env.VERIFY_MAX_SEARCHES) || 14,
       effort: VERIFY_EFFORT,
       stage: 'verify',
     })
@@ -194,7 +195,7 @@ async function verifyClaims(article, cluster, { date } = {}) {
     if (counts.UNCHECKED > 0) {
       console.warn(
         `   ⚠ ${counts.UNCHECKED} claim(s) went unchecked for want of search budget — ` +
-        `raise VERIFY_MAX_SEARCHES (currently ${Number(process.env.VERIFY_MAX_SEARCHES) || 24})`
+        `raise VERIFY_MAX_SEARCHES (currently ${Number(process.env.VERIFY_MAX_SEARCHES) || 14})`
       )
     }
     for (const c of claims.filter(c => c.verdict === 'CONTRADICTED')) {

@@ -14,11 +14,18 @@ const client = new Anthropic({
 const WRITER_MODEL = process.env.CLAUDE_WRITER_MODEL || 'claude-sonnet-5'
 // The validator is the publish gate; its approval rate is calibrated on Opus.
 const VALIDATOR_MODEL = process.env.CLAUDE_VALIDATOR_MODEL || 'claude-opus-4-8'
-// The verifier decides whether a claim is true against freshly retrieved
-// sources, and a wrong answer there is how a false fact reaches readers. Same
-// argument as the validator, so the same model. Override to trade accuracy for
-// spend.
-const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || VALIDATOR_MODEL
+// The verifier gathers evidence and judges claims against it. That was on Opus
+// on the reasoning that a wrong answer here is how a false fact reaches
+// readers - and it made verification 68% of a run's cost, 35 calls at $5/$25.
+//
+// Measured instead of assumed: handed the published SpaceX article, Sonnet 5
+// marked the four-month-stale ownership claim CONTRADICTED and cited CNBC's
+// own coverage of the pledge quoting a closing share price. Better sourcing
+// than the Opus run produced, at 40% of the price.
+//
+// The publish decision still belongs to Opus - the validator is unchanged -
+// so what moved to Sonnet is finding and weighing evidence, not deciding.
+const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || 'claude-sonnet-5'
 
 // Structured outputs guarantee parseable JSON: without them Sonnet emits raw
 // newlines inside the article body string, which JSON.parse rejects.
