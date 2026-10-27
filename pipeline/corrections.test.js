@@ -17,6 +17,7 @@ const {
   applyResolutions,
   pruneKeyFacts,
   supersededExcerpts,
+  enforceSourcedReplacements,
   locateExcerpt,
   splitSentences,
   matchScore,
@@ -203,6 +204,55 @@ test('supersededExcerpts ignores resolutions that did not apply', () => {
 
 test('a kept passage supersedes nothing', () => {
   assert.deepEqual(supersededExcerpts([{ excerpt: 'x', action: 'keep', ok: true }]), [])
+})
+
+// ── Rewrites must be sourced ──────────────────────────────────────────
+// On 2026-10-26 the correction step chose replace 62 times and delete 7, and
+// every rewrite became a new claim the next round flagged. Telling it to prefer
+// cutting did not work, so the rule is enforced rather than requested.
+
+test('a rewrite citing a retrieved page is kept', () => {
+  const { resolutions, downgraded } = enforceSourcedReplacements(
+    [{ excerpt: 'x', action: 'replace', replacement: 'y', reference: 'Reuters — https://reuters.com/article/a1' }],
+    ['https://reuters.com/article/a1']
+  )
+  assert.equal(resolutions[0].action, 'replace')
+  assert.deepEqual(downgraded, [])
+})
+
+test('a rewrite with no source becomes a deletion', () => {
+  const { resolutions, downgraded } = enforceSourcedReplacements(
+    [{ excerpt: 'x', action: 'replace', replacement: 'y', reference: 'widely reported' }],
+    ['https://reuters.com/article/a1']
+  )
+  assert.equal(resolutions[0].action, 'delete')
+  assert.deepEqual(downgraded, ['x'])
+})
+
+test('a rewrite citing a page that was never opened becomes a deletion', () => {
+  // The loophole that matters: a plausible URL the model produced from memory.
+  const { resolutions } = enforceSourcedReplacements(
+    [{ excerpt: 'x', action: 'replace', replacement: 'y', reference: 'https://en.wikipedia.org/wiki/SpaceX' }],
+    ['https://reuters.com/article/a1']
+  )
+  assert.equal(resolutions[0].action, 'delete')
+})
+
+test('URL matching survives scheme, www and trailing slash', () => {
+  const { resolutions } = enforceSourcedReplacements(
+    [{ excerpt: 'x', action: 'replace', replacement: 'y', reference: 'see https://www.Reuters.com/article/a1/' }],
+    ['http://reuters.com/article/a1']
+  )
+  assert.equal(resolutions[0].action, 'replace')
+})
+
+test('delete and keep are left alone', () => {
+  const { resolutions, downgraded } = enforceSourcedReplacements(
+    [{ excerpt: 'a', action: 'delete' }, { excerpt: 'b', action: 'keep', reference: 'AP — reported it' }],
+    []
+  )
+  assert.deepEqual(resolutions.map(r => r.action), ['delete', 'keep'])
+  assert.deepEqual(downgraded, [])
 })
 
 // ── Primitives ───────────────────────────────────────────────────────────────

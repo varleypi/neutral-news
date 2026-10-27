@@ -23,7 +23,7 @@ const {
   ARTICLE_SCHEMA,
   CORRECTIONS_SCHEMA,
 } = require('./claude')
-const { applyResolutions, pruneKeyFacts, supersededExcerpts } = require('./corrections')
+const { applyResolutions, pruneKeyFacts, supersededExcerpts, enforceSourcedReplacements } = require('./corrections')
 
 // Drafting and revision are writing tasks, not reasoning tasks: the research is
 // done by search, not by thinking harder. Medium effort keeps them from
@@ -201,9 +201,13 @@ For each flagged passage choose exactly one action:
               better short than wrong, and a deleted sentence costs nothing; an unsourced
               one costs the whole story.
   "replace" - the claim is salvageable if restated accurately. Put the corrected sentence
-              in "replacement". Search first and make it true as of ${today}. Write a
-              complete sentence in the article's voice: it is dropped in where the old one
-              was, so it has to read naturally beside its neighbours.
+              in "replacement", and the URL you confirmed it against in "reference".
+              THE URL IS REQUIRED and must be a page you actually opened in this search.
+              A replacement without one is downgraded to a deletion automatically, so
+              leaving it out does not keep the sentence - it only loses you the chance to
+              write a better one. Write a complete sentence in the article's voice: it is
+              dropped in where the old one was, so it has to read naturally beside its
+              neighbours.
   "keep"    - the passage is right as it stands AND you can name a source. Put the source
               in "reference", as an outlet plus what it supports. Only use this when you
               have actually confirmed it; your own confidence is not a source, and a "keep"
@@ -215,7 +219,7 @@ sentence is found. Give one resolution per flagged passage - all ${requiredIssue
 
 Searching is available; use it for any "replace" or "keep".`
 
-  const { content, stopReason } = await completeWithSearch({
+  const { content, stopReason, sources } = await completeWithSearch({
     model: WRITER_MODEL,
     system: SYSTEM_PROMPT,
     prompt,
@@ -225,7 +229,14 @@ Searching is available; use it for any "replace" or "keep".`
     stage: 'corrections',
   })
 
-  const { resolutions = [] } = parseSearchResponse(content, stopReason, 'Corrections')
+  const { resolutions: proposed = [] } = parseSearchResponse(content, stopReason, 'Corrections')
+
+  // Nothing new enters the article without a source behind it. A rewrite that
+  // cannot cite a page this step actually opened becomes a deletion.
+  const { resolutions, downgraded } = enforceSourcedReplacements(proposed, sources)
+  if (downgraded.length > 0) {
+    console.log(`   ${downgraded.length} unsourced rewrite(s) downgraded to deletions`)
+  }
 
   // The model's instructions; our edits.
   const { body, applied } = applyResolutions(article.body, resolutions.filter(r => r.action !== 'keep'))

@@ -73,10 +73,20 @@ function isDuplicateStory(candidateText, publishedTexts, threshold = 0.5) {
   return publishedTexts.some(t => jaccard(cand, significantWords(t)) >= threshold)
 }
 
-/** Review and verify in parallel - neither depends on the other's output. */
-async function checkArticle(article, cluster, date) {
+/**
+ * Review and verify in parallel - neither depends on the other's output.
+ *
+ * Grok runs on the first check only. On 2026-10-26 it was the single biggest
+ * line item: 36 calls at an average 218,000 input tokens each, $18.51 of a
+ * $44.16 run, because every pass re-ran it and every call drags its own search
+ * results into context. Its job is auditing neutrality and that reads much the
+ * same on the draft as on the corrected version, while facts - the thing
+ * corrections actually change - are the verifier's job and still re-run every
+ * pass. The Opus validator also judges neutrality on the final text.
+ */
+async function checkArticle(article, cluster, date, { withGrok = true } = {}) {
   const [review, verification] = await Promise.all([
-    grokReview(article, cluster, { date }),
+    withGrok ? grokReview(article, cluster, { date }) : Promise.resolve(EMPTY_REVIEW),
     verifyClaims(article, cluster, { date }),
   ])
   // The verifier's unconfirmed claims join the required-issue queue, so the gate
@@ -98,6 +108,10 @@ function unresolvedRequired(article, review) {
   const body = `${article.headline}\n${article.summary}\n${article.body}\n${(article.keyFacts ?? []).join('\n')}`
   return (review.issues ?? []).filter(i => i.severity === 'required' && excerptStillPresent(i.excerpt, body))
 }
+
+// Stands in for Grok on later passes: no findings of its own, so the gate sees
+// only what the verifier raised.
+const EMPTY_REVIEW = { overallScore: null, issues: [], critiqueText: '', reviewer: 'skipped', sourcesConsulted: [] }
 
 async function processCluster(cluster, date) {
   console.log(`\n  📰 "${cluster.topicLabel}" (${cluster.outletCount} outlets)`)
@@ -134,7 +148,7 @@ async function processCluster(cluster, date) {
     }
 
     console.log(`   Re-checking corrected article...`)
-    const rechecked = await checkArticle(article, cluster, date)
+    const rechecked = await checkArticle(article, cluster, date, { withGrok: false })
     console.log(`   Score after corrections: ${rechecked.review.overallScore}/10 (was ${review.overallScore}/10)`)
     review = rechecked.review
     verification = rechecked.verification
@@ -160,7 +174,7 @@ async function processCluster(cluster, date) {
       console.log(`   Applying corrections against the blockers...`)
       const { article: corrected } = await applyCorrections(article, stillRequired, { date })
       article = corrected
-      const rechecked = await checkArticle(article, cluster, date)
+      const rechecked = await checkArticle(article, cluster, date, { withGrok: false })
       review = rechecked.review
       verification = rechecked.verification
       validation = await claudeFinalValidation(article, review, { verification, date })
@@ -500,11 +514,15 @@ async function main() {
   // Stage 9: Announce the edition on X. Runs after the deploy hook so the links
   // point at a site that is already rebuilding; the article route renders on
   // demand anyway, so a link is never dead. Never fails the pipeline.
-  console.log('\n🐦 Stage 9 — Posting the edition to X...')
-  try {
-    await postDailyThread(date)
-  } catch (err) {
-    console.warn(`   ⚠ X post failed: ${err.message} — continuing`)
+  if (['1', 'true', 'yes'].includes(String(process.env.SKIP_SOCIAL ?? '').toLowerCase())) {
+    console.log('\n⏭  SKIP_SOCIAL set — generating the edition without posting it')
+  } else {
+    console.log('\n🐦 Stage 9 — Posting the edition to X...')
+    try {
+      await postDailyThread(date)
+    } catch (err) {
+      console.warn(`   ⚠ X post failed: ${err.message} — continuing`)
+    }
   }
 
   console.log('')

@@ -18,7 +18,19 @@ on:
         type: boolean
         default: false
       max_clusters:
-        description: 'Stop after this many candidate clusters (blank = no cap). Keeps a pilot cheap.'
+        description: 'Stop after this many candidate clusters (blank = no cap). Keeps a run cheap.'
+        required: false
+      verifier_model:
+        description: 'Verifier model, e.g. claude-sonnet-5 or claude-opus-4-8. Blank = default.'
+        required: false
+      verify_max_searches:
+        description: 'Verifier search budget. Lower is cheaper; 8 starved, 14 is the default.'
+        required: false
+      writer_search:
+        description: 'Set to off to stop the writer searching (cheapest, but it invents background).'
+        required: false
+      skip_social:
+        description: 'Set to true to generate the edition without posting it to X.'
         required: false
 
 # One edition at a time. On 2026-10-24 the SpinDetector dispatch and the backup
@@ -68,4 +80,11 @@ jobs:
           PIPELINE_MAX_CLUSTERS: ${{ github.event.inputs.max_clusters || '' }}
           # Manual runs always regenerate; automatic triggers skip a date that already has an edition.
           FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+          # Manual-dispatch knobs, so a run can be steered from the GitHub
+          # mobile app without editing code. All blank on scheduled and
+          # chained runs, which therefore use the defaults.
+          CLAUDE_VERIFIER_MODEL: ${{ github.event.inputs.verifier_model }}
+          VERIFY_MAX_SEARCHES: ${{ github.event.inputs.verify_max_searches }}
+          WRITER_SEARCH: ${{ github.event.inputs.writer_search }}
+          SKIP_SOCIAL: ${{ github.event.inputs.skip_social }}
         run: node pipeline/run.js

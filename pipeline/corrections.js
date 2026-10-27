@@ -189,6 +189,48 @@ function pruneKeyFacts(keyFacts = [], removedExcerpts = []) {
   })
 }
 
+/** Strip scheme, `www.` and any trailing slash so two spellings of a URL match. */
+function canonicalizeUrl(url) {
+  return String(url ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/+$/, '')
+}
+
+/**
+ * A rewrite has to come with a source, or it becomes a deletion.
+ *
+ * On 2026-10-26 the correction step chose `replace` 62 times and `delete` 7.
+ * Every rewrite is a new sentence the article did not have, which the next
+ * review round reads as a new claim, which the validator then waives without
+ * evidence - UNSUPPORTED_WAIVER went to 44 that day while one article
+ * published. The pipeline was manufacturing its own blockers, and paying
+ * 100-200k tokens a call to do it.
+ *
+ * Telling the model to prefer deletion did not work; the prompt already said
+ * an article is better short than wrong. So the rule is enforced instead: a
+ * replacement must cite a URL this step actually retrieved, and one that does
+ * not is downgraded to a deletion. Nothing new enters the article without a
+ * source behind it, and the model's reluctance to cut stops being decisive.
+ */
+function enforceSourcedReplacements(resolutions = [], retrievedUrls = []) {
+  const retrieved = new Set(retrievedUrls.map(canonicalizeUrl).filter(Boolean))
+  const downgraded = []
+
+  const enforced = resolutions.map(r => {
+    if (r?.action !== 'replace') return r
+    const cited = (String(r.reference ?? '').match(/https?:\/\/[^\s<>"')\]]+/g) ?? [])
+      .some(u => retrieved.has(canonicalizeUrl(u)))
+    if (cited) return r
+    downgraded.push(r.excerpt)
+    return { ...r, action: 'delete' }
+  })
+
+  return { resolutions: enforced, downgraded }
+}
+
 /**
  * Excerpts whose claim no longer stands, taken from what actually applied.
  *
@@ -210,6 +252,8 @@ function supersededExcerpts(applied = []) {
 module.exports = {
   applyResolutions,
   supersededExcerpts,
+  enforceSourcedReplacements,
+  canonicalizeUrl,
   pruneKeyFacts,
   locateExcerpt,
   splitSentences,
