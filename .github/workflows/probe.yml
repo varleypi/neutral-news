@@ -16,7 +16,7 @@ on:
         description: 'Override the verifier model, e.g. claude-sonnet-5. Blank = default.'
         required: false
       verify_max_searches:
-        description: 'Override the verifier search budget. Blank = default (24).'
+        description: 'Override the verifier search budget. Blank = default (14).'
         required: false
 
 jobs:
