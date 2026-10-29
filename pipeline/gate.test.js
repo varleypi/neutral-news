@@ -122,6 +122,56 @@ test('a contradicted claim blocks publication and cannot be waived', () => {
   assert.equal(blockers.filter(b => b.kind === 'CONTRADICTED_CLAIM').length, 1)
 })
 
+test('a contradicted claim no longer in the article does not block', () => {
+  // The article was corrected: the false sentence is gone. Blocking on the
+  // stale verdict would mean re-verifying every article from scratch just to
+  // learn that the thing the pipeline just fixed is fixed.
+  const rewritten = {
+    ...SPACEX_ARTICLE,
+    body: 'Elon Musk said Sunday that he intends to give one of his SpaceX shares to every child in America. SpaceX listed on Nasdaq in June 2026 and trades as SPCX.',
+    keyFacts: ['Musk said he will give one SpaceX share to each child in the US.'],
+  }
+
+  const { passed } = evaluateGate({
+    article: rewritten,
+    review: { issues: [] },
+    validation: { approved: true, requiredIssueDispositions: [] },
+    verification: {
+      status: 'ok',
+      claims: [{
+        claim: 'SpaceX is privately held',
+        excerpt: SPACEX_EXCERPT,
+        verdict: 'CONTRADICTED',
+        evidence: 'SpaceX listed on Nasdaq as SPCX on 2026-06-12.',
+        sources: ['https://ir.spacex.com/x'],
+      }],
+    },
+  })
+
+  assert.equal(passed, true)
+})
+
+test('a contradicted claim still in the article blocks, however it is dressed up', () => {
+  const { passed, blockers } = evaluateGate({
+    article: SPACEX_ARTICLE,
+    review: { issues: [] },
+    // Even with the validator approving and offering no dispositions at all.
+    validation: { approved: true, confidenceScore: 9.9, requiredIssueDispositions: [] },
+    verification: {
+      status: 'ok',
+      claims: [{
+        claim: 'SpaceX is privately held',
+        excerpt: SPACEX_EXCERPT,
+        verdict: 'CONTRADICTED',
+        evidence: 'SpaceX listed on Nasdaq as SPCX on 2026-06-12.',
+        sources: ['https://ir.spacex.com/x'],
+      }],
+    },
+  })
+  assert.equal(passed, false)
+  assert.ok(blockers.some(b => b.kind === 'CONTRADICTED_CLAIM'))
+})
+
 test('a waiver citing a retrieved source is accepted', () => {
   const verification = {
     status: 'ok',

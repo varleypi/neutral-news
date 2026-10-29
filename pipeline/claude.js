@@ -14,18 +14,20 @@ const client = new Anthropic({
 const WRITER_MODEL = process.env.CLAUDE_WRITER_MODEL || 'claude-sonnet-5'
 // The validator is the publish gate; its approval rate is calibrated on Opus.
 const VALIDATOR_MODEL = process.env.CLAUDE_VALIDATOR_MODEL || 'claude-opus-4-8'
-// The verifier gathers evidence and judges claims against it. That was on Opus
-// on the reasoning that a wrong answer here is how a false fact reaches
-// readers - and it made verification 68% of a run's cost, 35 calls at $5/$25.
+// The verifier gathers evidence and judges claims against it. It went Opus ->
+// Sonnet -> Haiku, each step measured against the same fixture: the published
+// 10/19 SpaceX article, which every one of them marked CONTRADICTED with real
+// citations. Haiku gave the fullest account of the three, naming the IPO date,
+// the ticker, the offer price and the October share price.
 //
-// Measured instead of assumed: handed the published SpaceX article, Sonnet 5
-// marked the four-month-stale ownership claim CONTRADICTED and cited CNBC's
-// own coverage of the pledge quoting a closing share price. Better sourcing
-// than the Opus run produced, at 40% of the price.
+// That matters because this stage's cost is almost entirely the search results
+// it drags into context - 148,000 input tokens a call - and what multiplies
+// those is the model's input rate. Haiku is $0.10/MTok against Opus's $5.00,
+// so the same work costs a fiftieth.
 //
-// The publish decision still belongs to Opus - the validator is unchanged -
-// so what moved to Sonnet is finding and weighing evidence, not deciding.
-const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || 'claude-sonnet-5'
+// The publish decision still belongs to Opus. The validator is unchanged, so
+// what is cheap here is finding and weighing evidence, not deciding.
+const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || 'claude-haiku-5-5'
 
 // Structured outputs guarantee parseable JSON: without them Sonnet emits raw
 // newlines inside the article body string, which JSON.parse rejects.

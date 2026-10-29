@@ -32,14 +32,15 @@ const {
 const GROK_MODEL = process.env.GROK_MODEL || 'grok-4.7'
 
 const GROK_REVIEW_SYSTEM = `You are a rigorous fact-checker and neutrality auditor for a wire news service.
-You have live web access — use it. Your job is to find claims that are false or out of date,
-claims that cannot be verified, loaded language, imbalance in how sides are represented, and
-editorial opinion masquerading as fact.
+Your job is loaded language, imbalance in how sides are represented, editorial opinion
+masquerading as fact, and claims the source headlines do not support.
 
-Your own background knowledge has a cutoff and the article you are checking may describe
-something that changed after it. When an article states a fact about the current state of the
-world — who owns what, what is public or private, who holds an office, what something costs —
-search for it rather than judging it from memory. You respond with valid JSON only.`
+A separate stage checks every factual claim against live sources, so currency is not your
+problem and you have no web access here. Do not guess at whether a fact is current from
+memory - your training data has a cutoff and guessing is how a stale fact gets waved through.
+Flag what the headlines do not support as UNVERIFIABLE and let the fact-check settle it.
+
+You respond with valid JSON only.`
 
 const CLAUDE_VALIDATION_SYSTEM = `You are the final editorial validator for a neutral news service.
 You certify factual accuracy and political neutrality before publication, and you account for
@@ -137,7 +138,12 @@ async function grokReview(draft, cluster, { date } = {}) {
           { role: 'system', content: GROK_REVIEW_SYSTEM },
           { role: 'user', content: buildGrokPrompt(draft, cluster, today) },
         ],
-        tools: [{ type: 'web_search' }],
+        // No search. Grok searching cost $5.14 of a $19.13 run at 221,000
+        // input tokens a call, and it was added so Grok could catch stale
+        // facts - which the verifier now does properly, against live sources,
+        // for a fraction of that. What is left is Grok's actual job here:
+        // an independent read on neutrality, balance and editorialising,
+        // which it does from the article text and the source headlines.
       }),
       // Two minutes was never enough for a search-backed Grok review, and it
       // showed: across both pilots Grok completed exactly zero reviews. The

@@ -152,11 +152,19 @@ function evaluateGate({ article, review, validation, verification }) {
   const body = `${article?.headline ?? ''}\n${article?.summary ?? ''}\n${article?.body ?? ''}\n${(article?.keyFacts ?? []).join('\n')}`
   const references = article?.references ?? []
 
-  // ── 1. Contradicted claims are absolute ───────────────────────────────────
+  // ── 1. Contradicted claims, while the article still makes them ────────────
   // A claim current sources say is false does not get published behind a
   // confidence score, however well the rest of the article reads.
+  //
+  // But the test is whether the article still ASSERTS it. A contradicted claim
+  // whose sentence has been cut, or replaced with a sourced correction, is not
+  // a reason to reject the article — there is nothing false left on the page.
+  // Checking the text rather than the verdict list is what lets the pipeline
+  // correct an article once and publish it, instead of paying to re-verify
+  // from scratch to discover that what it just fixed is fixed.
   const contradicted = (verification?.claims ?? []).filter(c => c.verdict === 'CONTRADICTED')
   for (const c of contradicted) {
+    if (!excerptStillPresent(c.excerpt, body)) continue
     blockers.push({
       kind: 'CONTRADICTED_CLAIM',
       detail: `Current sources contradict: "${c.claim}"`,

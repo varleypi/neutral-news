@@ -147,11 +147,17 @@ async function processCluster(cluster, date) {
       console.warn(`   ! ${stillThere.length} flagged passage(s) still in the article after corrections`)
     }
 
-    console.log(`   Re-checking corrected article...`)
-    const rechecked = await checkArticle(article, cluster, date, { withGrok: false })
-    console.log(`   Score after corrections: ${rechecked.review.overallScore}/10 (was ${review.overallScore}/10)`)
-    review = rechecked.review
-    verification = rechecked.verification
+    // No re-check. Every rule the gate enforces reads the FINAL text: whether
+    // each required issue was resolved, whether a contradicted claim is still
+    // asserted, whether a waiver names evidence that exists. Re-verifying from
+    // scratch was paying 148,000 tokens a call to be told that what we just
+    // corrected is corrected.
+    //
+    // What makes this safe is that corrections can no longer smuggle anything
+    // in: a deletion adds nothing, and a replacement has to cite a page the
+    // correction step actually opened. The residual risk is a sourced
+    // replacement that is accurate but introduces some other problem, and the
+    // Opus validator reads the final text precisely to catch that.
   } else {
     console.log(`   No required issues - skipping corrections`)
   }
