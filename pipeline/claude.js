@@ -55,32 +55,58 @@ async function complete({ model = WRITER_MODEL, system, prompt, maxTokens, schem
 // bill went - including mine - was inferred from how many sources a stage
 // retrieved. A run now prints what it actually spent, per stage.
 
+// Haiku 5.5 is the one model here whose rate is not flat: the headline
+// $0.10/$0.50 holds only while a prompt stays under 100K tokens, and every
+// searching call in this pipeline lands well over that - the verifier averages
+// ~148K. Pricing it flat understated that stage by 5x and produced a $7.21
+// projection for a run that cannot cost that little. A tier has to be applied
+// per call, not to a stage total, so cost is accumulated as each call lands.
 const PRICES = {
   'claude-opus-4-8': { input: 5, output: 25 },
   'claude-opus-5-5': { input: 4, output: 20 },
   'claude-sonnet-5': { input: 2, output: 10 },
   'claude-sonnet-5-5': { input: 2, output: 10 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
+  'claude-haiku-5-5': {
+    input: 0.1, output: 0.5,
+    longThreshold: 100_000, longInput: 0.5, longOutput: 2.5,
+  },
   'grok-4.7': { input: 2, output: 6 },
 }
 
 const spend = new Map()
 
+/** What one call cost, with any long-prompt tier applied. `null` if unpriced. */
+function callCost(model, input, output) {
+  const p = PRICES[model]
+  if (!p) return null
+  const long = p.longThreshold !== undefined && input > p.longThreshold
+  return (input / 1e6) * (long ? p.longInput : p.input) +
+         (output / 1e6) * (long ? p.longOutput : p.output)
+}
+
 /** Record one call. `usage` is the provider's own usage object. */
 function recordUsage(stage, model, usage = {}) {
   const key = `${stage}|${model}`
-  const row = spend.get(key) ?? { stage, model, calls: 0, input: 0, output: 0, cached: 0 }
+  const row = spend.get(key) ??
+    { stage, model, calls: 0, input: 0, output: 0, cached: 0, cost: 0, longCalls: 0, priced: true }
+  const input = usage.input_tokens ?? usage.prompt_tokens ?? 0
+  const output = usage.output_tokens ?? usage.completion_tokens ?? 0
   row.calls += 1
-  row.input += usage.input_tokens ?? usage.prompt_tokens ?? 0
-  row.output += usage.output_tokens ?? usage.completion_tokens ?? 0
+  row.input += input
+  row.output += output
   row.cached += usage.cache_read_input_tokens ?? 0
+
+  const cost = callCost(model, input, output)
+  if (cost === null) row.priced = false
+  else row.cost += cost
+  const p = PRICES[model]
+  if (p?.longThreshold !== undefined && input > p.longThreshold) row.longCalls += 1
+
   spend.set(key, row)
 }
 
 function rowCost(r) {
-  const p = PRICES[r.model]
-  if (!p) return null
-  return (r.input / 1e6) * p.input + (r.output / 1e6) * p.output
+  return r.priced ? r.cost : null
 }
 
 /** Lines for the end of a run, dearest stage first. */
@@ -95,11 +121,15 @@ function usageReport() {
     out.push(
       r.stage.padEnd(20) + r.model.padEnd(18) +
       String(r.calls).padStart(5) + String(r.input).padStart(11) + String(r.output).padStart(11) +
-      (c === null ? '          ?' : ('$' + c.toFixed(2)).padStart(11))
+      (c === null ? '          ?' : ('$' + c.toFixed(2)).padStart(11)) +
+      (r.longCalls > 0 ? `  * ${r.longCalls}/${r.calls} over 100K` : '')
     )
   }
   out.push(`${''.padEnd(38)}${String([...spend.values()].reduce((a, r) => a + r.calls, 0)).padStart(5)}${''.padStart(22)}${('$' + total.toFixed(2)).padStart(11)}`)
   out.push('(estimate: list prices, no discounts or cache pricing applied)')
+  if (rows.some(r => r.longCalls > 0)) {
+    out.push('(* billed at the long-prompt tier - search results push these over 100K)')
+  }
   return out
 }
 
