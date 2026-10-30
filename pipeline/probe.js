@@ -305,6 +305,75 @@ async function probeCorrections() {
   }
 }
 
+/**
+ * The same stage given several passages at once.
+ *
+ * One flagged passage is the easy case, and it is not the case that hurt. The
+ * failure that blocked most of an edition was required corrections coming back
+ * unapplied - a model handed five passages answering three, or paraphrasing an
+ * excerpt so `locateExcerpt` could not find the sentence it meant. Both get
+ * likelier with more passages and a smaller model, and neither shows up in a
+ * single-issue probe, so a model swap on this stage has to clear this one too.
+ */
+async function probeCorrectionsMulti() {
+  const issues = [
+    {
+      type: 'UNVERIFIABLE',
+      severity: 'required',
+      excerpt: SPACEX_EXCERPT,
+      correction: 'SpaceX is publicly traded on Nasdaq as SPCX since June 2026. Remove or correct this.',
+    },
+    // A whole sentence, deliberately. Corrections acts on runs of consecutive
+    // sentences, so a sub-sentence clause cannot be located however good the
+    // model is - a probe built on one would fail every model and look like a
+    // verdict on the cheap one. (That limit is real in production too: a
+    // `required` issue quoting a clause can never be reported removed.)
+    {
+      type: 'UNSOURCED',
+      severity: 'required',
+      excerpt: 'As of now, the pledge exists only as a public statement from Musk.',
+      correction: 'This characterisation is unsourced as stated. Source it or cut it.',
+    },
+    {
+      type: 'UNVERIFIABLE',
+      severity: 'required',
+      excerpt: 'no regulatory filings describing such a distribution have been reported',
+      correction: 'An absence of filings cannot be confirmed from the cited reporting. Source it or cut it.',
+    },
+  ]
+
+  const { article, applied, unresolved } = await applyCorrections(SPACEX_ARTICLE, issues, { date: PROBE_DATE })
+
+  const text = `${article.body} ${(article.keyFacts ?? []).join(' ')}`
+  const survived = /(?:is|remains|stays)\s+privately\s+held|shares\s+do\s+not\s+trade|is\s+not\s+publicly\s+traded/i.exec(text)
+  const how = applied.map(a => `${a.action}${a.ok ? '' : ` FAILED(${a.reason})`}`).join(', ') || 'no resolutions'
+  const failedToLocate = applied.filter(a => !a.ok)
+
+  const problems = []
+  if (survived) problems.push(`the false claim survived as "${survived[0]}"`)
+  // The one that matters: a passage with no resolution is a required issue the
+  // gate will block the article on, which is how this stage stalls an edition.
+  if (unresolved.length > 0) problems.push(`${unresolved.length}/${issues.length} passage(s) left unresolved`)
+  if (failedToLocate.length > 0) problems.push(`${failedToLocate.length} excerpt(s) could not be located in the body`)
+
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      detail: [
+        `${CORRECTOR_MODEL}: ${problems.join('; ')} [${how}]`,
+        `       body: ${article.body.replace(/\s+/g, ' ').slice(0, 220)}`,
+      ].join('\n'),
+    }
+  }
+
+  return {
+    ok: true,
+    detail: `${CORRECTOR_MODEL}: all ${issues.length} passages resolved and located [${how}]; ` +
+      `body ${SPACEX_ARTICLE.body.length} -> ${article.body.length} chars, ` +
+      `keyFacts ${SPACEX_ARTICLE.keyFacts.length} -> ${article.keyFacts.length}`,
+  }
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
 
 const PROBES = {
@@ -314,6 +383,7 @@ const PROBES = {
   schema: { run: probeSchema, cost: '1 call' },
   draft: { run: probeDraft, cost: '1 call' },
   corrections: { run: probeCorrections, cost: '1 call' },
+  'corrections-multi': { run: probeCorrectionsMulti, cost: '1 call' },
 }
 
 async function main() {
