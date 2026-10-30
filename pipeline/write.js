@@ -23,7 +23,9 @@ const {
   CORRECTOR_MODEL,
   ARTICLE_SCHEMA,
   CORRECTIONS_SCHEMA,
+  RESTATEMENT_SCHEMA,
 } = require('./claude')
+const { excerptStillPresent } = require('./gate')
 const { applyResolutions, pruneKeyFacts, supersededExcerpts, enforceSourcedReplacements } = require('./corrections')
 
 // Drafting and revision are writing tasks, not reasoning tasks: the research is
@@ -249,20 +251,47 @@ Searching is available; use it for any "replace" or "keep".`
     .filter(r => r.action === 'keep' && String(r.reference ?? '').trim())
     .map(r => r.reference.trim())
 
-  const corrected = {
+  let corrected = {
     ...article,
     body,
     keyFacts: pruneKeyFacts(article.keyFacts ?? [], superseded),
     references: [...new Set([...(article.references ?? []), ...addedRefs])],
   }
 
-  // A flagged passage with no resolution, or one whose resolution did not
-  // match any sentence, is still in the article. Say so now - it is free.
-  const resolvedExcerpts = new Set(applied.filter(a => a.ok).map(a => a.excerpt))
+  // The headline and summary are claims the gate reads, and until now nothing
+  // could edit them. That was a deadlock, not a gap: a contradicted claim
+  // living in the summary could not be removed by any number of correction
+  // passes, so the gate found it present every time and blocked the article
+  // for good - at the price of two corrections and two validations first. On
+  // 2026-10-30 that took an edition down to one published story out of twelve
+  // and cost $16, with the validator itself reporting the cause: "the summary
+  // mischaracterizes a '$55-billion-plus AI capital spending plan'".
+  //
+  // Deleting is not available here the way it is in the body - an article
+  // cannot lose its headline - so these two get restated from the body
+  // instead. The body is corrected and verified by this point and the
+  // restatement may not add to it, which is what keeps this from smuggling in
+  // a fresh unverified claim.
+  const stale = stalePromotedClaims(corrected, superseded, applied)
+  if (stale.length > 0) {
+    corrected = await restateFromBody(corrected, stale)
+  }
+
+  // A flagged passage is answered if its resolution applied, if it was kept
+  // with a source, or if the text is simply no longer anywhere in the article.
+  // That last test is why this reads the article rather than the resolution
+  // list: a claim that only ever lived in the summary is answered by the
+  // restatement above, and nothing in `applied` would say so. It is also the
+  // same question the gate asks, so the two can no longer disagree.
+  const fullText = [
+    corrected.headline ?? '', corrected.summary ?? '', corrected.body ?? '',
+    ...(corrected.keyFacts ?? []),
+  ].join('\n')
   const kept = new Set(resolutions.filter(r => r.action === 'keep').map(r => r.excerpt))
   const unresolved = requiredIssues.filter(i =>
-    !resolvedExcerpts.has(i.excerpt) && !kept.has(i.excerpt) &&
-    !applied.some(a => a.ok && a.excerpt === i.excerpt)
+    !kept.has(i.excerpt) &&
+    !applied.some(a => a.ok && a.excerpt === i.excerpt) &&
+    excerptStillPresent(i.excerpt, fullText)
   )
 
   const counts = resolutions.reduce((acc, r) => ({ ...acc, [r.action]: (acc[r.action] ?? 0) + 1 }), {})
@@ -275,4 +304,76 @@ Searching is available; use it for any "replace" or "keep".`
   return { article: corrected, applied, unresolved }
 }
 
-module.exports = { writeDraft, applyCorrections }
+/**
+ * Claims the headline or summary still makes that the body no longer supports.
+ *
+ * Two ways a claim ends up stranded in those fields: it was removed from the
+ * body, so a restatement of it up front is now stale; or it was never located
+ * in the body because the headline or summary is the only place it appears -
+ * which is the case that used to be unfixable.
+ */
+function stalePromotedClaims(article, superseded = [], applied = []) {
+  const promoted = `${article.headline ?? ''}\n${article.summary ?? ''}`
+  const unlocatable = applied.filter(a => !a.ok).map(a => a.excerpt)
+  return [...new Set([...superseded, ...unlocatable])]
+    .filter(excerpt => excerptStillPresent(excerpt, promoted))
+}
+
+/**
+ * Rewrite the headline and summary to say only what the corrected body says.
+ *
+ * No search, no new facts: by this point the body has been through the
+ * fact-check and the corrections, so restating it adds nothing the gate has
+ * not already cleared. That constraint is the whole safety argument for this
+ * call, so the prompt spends most of its words on it.
+ *
+ * Fails closed. If the call or the parse fails the article keeps the headline
+ * and summary it had and the gate blocks it - which is exactly what happened
+ * before this existed, so a failure here is no worse than the old behaviour.
+ */
+async function restateFromBody(article, stale) {
+  const prompt = `This article's body has just been fact-checked and corrected. Its headline and
+summary were written before those corrections and now assert ${stale.length === 1 ? 'a claim' : 'claims'} the
+body no longer supports:
+
+${stale.map(s => `  - "${s}"`).join('\n')}
+
+Rewrite the headline and the summary so they describe the corrected body.
+
+CORRECTED BODY:
+${article.body}
+
+Rules, in order of importance:
+
+  1. Say nothing the body does not say. No figure, name, date or
+     characterisation may appear in your headline or summary unless it is in
+     the body above. You have no sources and no search here; anything you add
+     from memory will be caught and will block the article.
+  2. Drop the claims listed above rather than restating them in softer words.
+     "Reportedly", "roughly" and "appears to" do not fix an unsupported claim.
+  3. The headline is one line, specific, and not sensational. The summary is
+     one or two sentences covering what the story is and why it matters.
+  4. Keep the house voice of the body.`
+
+  try {
+    const raw = await complete({
+      model: CORRECTOR_MODEL,
+      system: SYSTEM_PROMPT,
+      prompt,
+      maxTokens: 2000,
+      schema: RESTATEMENT_SCHEMA,
+      stage: 'restate',
+    })
+    const { headline, summary } = JSON.parse(raw)
+    if (!String(headline ?? '').trim() || !String(summary ?? '').trim()) {
+      throw new Error('restatement came back without a headline or summary')
+    }
+    console.log(`   Restated headline and summary (${stale.length} stale claim(s) in them)`)
+    return { ...article, headline: String(headline).trim(), summary: String(summary).trim() }
+  } catch (err) {
+    console.log(`   ⚠ Could not restate headline and summary: ${err.message}`)
+    return article
+  }
+}
+
+module.exports = { writeDraft, applyCorrections, stalePromotedClaims }

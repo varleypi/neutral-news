@@ -305,6 +305,86 @@ async function probeCorrections() {
   }
 }
 
+// The 2026-10-30 Alphabet article, reduced to the shape that deadlocked it:
+// the flagged claim is in the summary, and the body says the opposite. Nothing
+// a correction pass did to the body could remove it, so the gate blocked the
+// article on every attempt - twice, at full price, before giving up.
+const DEADLOCK_ARTICLE = {
+  headline: 'Alphabet Shares Tumble After Earnings Beat Raises Questions About AI Spending',
+  summary:
+    'Alphabet shares fell sharply after a $55-billion-plus AI capital spending plan ' +
+    'unsettled investors, wiping out upwards of $500 billion in market value.',
+  body:
+    'Alphabet shares closed sharply lower on Thursday after third-quarter results.\n\n' +
+    'The company maintained its full-year 2026 capital spending range of $195 billion ' +
+    'to $205 billion, unchanged since July. Third-quarter capital expenditure was ' +
+    '$51.4 billion.\n\n' +
+    'Analysts had expected quarterly capital spending of about $55 billion.',
+  keyFacts: [
+    'Alphabet kept its 2026 capex range at $195-205 billion.',
+    'Third-quarter capital expenditure was $51.4 billion.',
+  ],
+  references: ['CNBC — reported Q3 results and the analyst capex expectation'],
+}
+
+/**
+ * The deadlock: a required claim that lives in the summary, not the body.
+ *
+ * Before the restatement step this could not come out however many passes ran,
+ * because corrections only ever edited the body while the gate read the
+ * headline and summary too. A pass here means the claim is gone from the whole
+ * article and nothing is left unresolved - i.e. the gate would now let it
+ * through instead of blocking it forever.
+ */
+async function probeDeadlock() {
+  const issue = {
+    type: 'UNVERIFIED',
+    severity: 'required',
+    excerpt: 'a $55-billion-plus AI capital spending plan',
+    correction:
+      'The $55 billion figure is the analyst expectation for quarterly capex, not a ' +
+      'company spending plan. Alphabet\'s stated 2026 plan is $195-205 billion.',
+  }
+
+  const { article, unresolved } = await applyCorrections(DEADLOCK_ARTICLE, [issue], { date: PROBE_DATE })
+
+  const whole = `${article.headline} ${article.summary} ${article.body} ${(article.keyFacts ?? []).join(' ')}`
+  const problems = []
+
+  // The falsehood, not the digits: "$55 billion was what analysts expected" is
+  // a correct sentence containing the number.
+  if (/\$55[- ]billion[- ]plus|\$55 billion(?![^.]*\b(analyst|expect|estimate))/i.test(whole)) {
+    problems.push('the mischaracterised $55bn plan is still asserted')
+  }
+  if (unresolved.length > 0) problems.push(`${unresolved.length} required issue(s) still unresolved`)
+  if (!String(article.headline ?? '').trim()) problems.push('headline came back empty')
+  if (!String(article.summary ?? '').trim()) problems.push('summary came back empty')
+  // A restatement may only restate. A figure that is in neither the body nor
+  // the original summary would be a fresh unverified claim, which is the one
+  // way this step could do harm.
+  const invented = (String(article.summary).match(/\$[\d.]+[- ]?(?:billion|million|trillion)/gi) ?? [])
+    .filter(fig => !DEADLOCK_ARTICLE.body.includes(fig.replace(/-/g, ' ')) && !DEADLOCK_ARTICLE.body.includes(fig))
+  if (invented.length > 0) problems.push(`restatement introduced figures absent from the body: ${invented.join(', ')}`)
+
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      detail: [
+        `${CORRECTOR_MODEL}: ${problems.join('; ')}`,
+        `       headline: ${article.headline}`,
+        `       summary:  ${article.summary}`,
+      ].join('\n'),
+    }
+  }
+
+  return {
+    ok: true,
+    detail: `${CORRECTOR_MODEL}: claim gone from summary, nothing unresolved\n` +
+      `       headline: ${article.headline}\n` +
+      `       summary:  ${article.summary}`,
+  }
+}
+
 /**
  * The same stage given several passages at once.
  *
@@ -384,6 +464,7 @@ const PROBES = {
   draft: { run: probeDraft, cost: '1 call' },
   corrections: { run: probeCorrections, cost: '1 call' },
   'corrections-multi': { run: probeCorrectionsMulti, cost: '1 call' },
+  deadlock: { run: probeDeadlock, cost: '2 calls' },
 }
 
 async function main() {

@@ -394,6 +394,15 @@ const CORRECTIONS_SCHEMA = object({
   },
 })
 
+// Used after a correction to bring the headline and summary back in line with
+// the body. Deliberately only these two fields: the body has already been
+// corrected and verified at that point, and nothing here is allowed to add to
+// it, so this call introduces no claim the gate has not already seen.
+const RESTATEMENT_SCHEMA = object({
+  headline: { type: 'string' },
+  summary: { type: 'string' },
+})
+
 module.exports = {
   client,
   complete,
@@ -415,4 +424,5 @@ module.exports = {
   REVIEW_SCHEMA,
   VALIDATION_SCHEMA,
   CORRECTIONS_SCHEMA,
+  RESTATEMENT_SCHEMA,
 }
