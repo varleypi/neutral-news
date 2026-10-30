@@ -26,6 +26,9 @@ on:
       verify_max_searches:
         description: 'Verifier search budget. Lower is cheaper; 8 starved, 14 is the default.'
         required: false
+      corrector_model:
+        description: 'Corrections model. Default claude-haiku-5-5; set claude-sonnet-5 to undo that.'
+        required: false
       writer_search:
         description: 'Set to off to stop the writer searching (cheapest, but it invents background).'
         required: false
@@ -85,6 +88,7 @@ jobs:
           # chained runs, which therefore use the defaults.
           CLAUDE_VERIFIER_MODEL: ${{ github.event.inputs.verifier_model }}
           VERIFY_MAX_SEARCHES: ${{ github.event.inputs.verify_max_searches }}
+          CLAUDE_CORRECTOR_MODEL: ${{ github.event.inputs.corrector_model }}
           WRITER_SEARCH: ${{ github.event.inputs.writer_search }}
           SKIP_SOCIAL: ${{ github.event.inputs.skip_social }}
         run: node pipeline/run.js

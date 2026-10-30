@@ -31,12 +31,22 @@ const VALIDATOR_MODEL = process.env.CLAUDE_VALIDATOR_MODEL || 'claude-opus-4-8'
 const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || 'claude-haiku-5-5'
 
 // Corrections resolves each flagged passage to delete, replace or keep. It
-// shares the writer's model by default because it used to share its job, but
-// since replacements must cite a page the step actually opened, the work is
-// now mostly choosing between those three - which is why it is worth asking
-// whether it still needs the writer's model. Separately settable so that
-// question can be answered by one probe call rather than a production run.
-const CORRECTOR_MODEL = process.env.CLAUDE_CORRECTOR_MODEL || WRITER_MODEL
+// shared the writer's Sonnet because it used to share its job, but since a
+// replacement must cite a page the step actually opened, the work is now
+// mostly choosing between those three - and at $3.47 of an $8.50 run it was
+// the dearest stage left.
+//
+// Haiku was measured against Sonnet on two probes before this moved: the
+// single-issue fixture twice, and a three-passage one built because one
+// flagged passage is not the case that hurt - required corrections coming
+// back unapplied is what blocked most of an edition, and that needs several
+// passages to show up. Haiku resolved and located all three, producing two
+// sourced replacements where Sonnet produced one.
+//
+// If it does disappoint on real articles the gate blocks them rather than
+// publishing them, so the symptom is throughput in the run log, not errors on
+// the site - and CLAUDE_CORRECTOR_MODEL reverses it without a commit.
+const CORRECTOR_MODEL = process.env.CLAUDE_CORRECTOR_MODEL || 'claude-haiku-5-5'
 
 // Structured outputs guarantee parseable JSON: without them Sonnet emits raw
 // newlines inside the article body string, which JSON.parse rejects.
