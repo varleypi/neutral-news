@@ -18,6 +18,9 @@ on:
       verify_max_searches:
         description: 'Override the verifier search budget. Blank = default (14).'
         required: false
+      corrector_model:
+        description: 'Override the corrections model, e.g. claude-haiku-5-5. Blank = the writer model.'
+        required: false
 
 jobs:
   probe:
@@ -52,4 +55,5 @@ jobs:
           # being argued about, or worse, shipped and measured in production.
           CLAUDE_VERIFIER_MODEL: ${{ github.event.inputs.verifier_model }}
           VERIFY_MAX_SEARCHES: ${{ github.event.inputs.verify_max_searches }}
+          CLAUDE_CORRECTOR_MODEL: ${{ github.event.inputs.corrector_model }}
         run: node pipeline/probe.js ${{ github.event.inputs.probes }}

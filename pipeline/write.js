@@ -20,6 +20,7 @@ const {
   completeWithSearch,
   parseSearchResponse,
   WRITER_MODEL,
+  CORRECTOR_MODEL,
   ARTICLE_SCHEMA,
   CORRECTIONS_SCHEMA,
 } = require('./claude')
@@ -220,7 +221,7 @@ sentence is found. Give one resolution per flagged passage - all ${requiredIssue
 Searching is available; use it for any "replace" or "keep".`
 
   const { content, stopReason, sources } = await completeWithSearch({
-    model: WRITER_MODEL,
+    model: CORRECTOR_MODEL,
     system: SYSTEM_PROMPT,
     prompt,
     maxUses: 8,

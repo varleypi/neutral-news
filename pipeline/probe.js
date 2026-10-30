@@ -22,7 +22,7 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
-const { client, VERIFIER_MODEL, webSearchTool } = require('./claude')
+const { client, VERIFIER_MODEL, CORRECTOR_MODEL, webSearchTool } = require('./claude')
 const { writeDraft, applyCorrections } = require('./write')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
@@ -299,7 +299,7 @@ async function probeCorrections() {
 
   return {
     ok: true,
-    detail: `flagged claim gone [${how}]; ` +
+    detail: `${CORRECTOR_MODEL}: flagged claim gone [${how}]; ` +
       `body ${SPACEX_ARTICLE.body.length} -> ${article.body.length} chars, ` +
       `keyFacts ${SPACEX_ARTICLE.keyFacts.length} -> ${article.keyFacts.length}`,
   }

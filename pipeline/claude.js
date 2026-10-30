@@ -22,12 +22,21 @@ const VALIDATOR_MODEL = process.env.CLAUDE_VALIDATOR_MODEL || 'claude-opus-4-8'
 //
 // That matters because this stage's cost is almost entirely the search results
 // it drags into context - 148,000 input tokens a call - and what multiplies
-// those is the model's input rate. Haiku is $0.10/MTok against Opus's $5.00,
-// so the same work costs a fiftieth.
+// those is the model's input rate. Haiku is $0.50/MTok at that prompt size
+// (its $0.10 headline rate stops at 100K) against Opus's $5.00, so the same
+// work costs a tenth - not the fiftieth the headline rate suggests.
 //
 // The publish decision still belongs to Opus. The validator is unchanged, so
 // what is cheap here is finding and weighing evidence, not deciding.
 const VERIFIER_MODEL = process.env.CLAUDE_VERIFIER_MODEL || 'claude-haiku-5-5'
+
+// Corrections resolves each flagged passage to delete, replace or keep. It
+// shares the writer's model by default because it used to share its job, but
+// since replacements must cite a page the step actually opened, the work is
+// now mostly choosing between those three - which is why it is worth asking
+// whether it still needs the writer's model. Separately settable so that
+// question can be answered by one probe call rather than a production run.
+const CORRECTOR_MODEL = process.env.CLAUDE_CORRECTOR_MODEL || WRITER_MODEL
 
 // Structured outputs guarantee parseable JSON: without them Sonnet emits raw
 // newlines inside the article body string, which JSON.parse rejects.
@@ -389,6 +398,7 @@ module.exports = {
   usageReport,
   TIMEOUT_MS,
   WRITER_MODEL,
+  CORRECTOR_MODEL,
   VALIDATOR_MODEL,
   VERIFIER_MODEL,
   ARTICLE_SCHEMA,
