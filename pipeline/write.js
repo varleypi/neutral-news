@@ -37,8 +37,24 @@ const WRITE_EFFORT = process.env.CLAUDE_WRITE_EFFORT || 'medium'
 // getting them wrong costs a whole candidate. Worth more effort than drafting.
 const CORRECT_EFFORT = process.env.CLAUDE_CORRECT_EFFORT || 'high'
 
+// The output ceiling for corrections, and the reason the 2026-10-31 edition
+// published nothing. The default was 16000; the corrections-multi probe, at
+// the 12 flagged passages that killed that edition's Proposition 40 story,
+// measured 18062 output tokens. The stage was about 2000 tokens short of being
+// able to answer, and 9 of 12 drafts died there - every one with 10 or more
+// required corrections. Haiku 5.5 reaches that ceiling sooner than Sonnet
+// because it runs adaptive thinking by default and counts tokens about 30%
+// heavier, but it is not a Haiku-only ceiling: Sonnet hit it once at 15 issues
+// the day before.
+//
+// 64000 rather than something snugger, because max_tokens is a ceiling and not
+// a reservation - unused headroom is never billed, so a cap set close to
+// observed usage buys nothing and costs an edition on the first busier day.
+// Observed days have gone to 19 flagged passages, and half of Haiku's 128K
+// output limit is clear of any plausible extrapolation from one measurement.
+//
 // Exported so the probe asserts against the cap the stage actually uses.
-const CORRECTIONS_MAX_TOKENS = 32000
+const CORRECTIONS_MAX_TOKENS = 64000
 
 // Set WRITER_SEARCH=off to fall back to master's non-searching writer - the
 // cheaper shape, at the cost of the stage that was inventing background.
@@ -230,12 +246,6 @@ Searching is available; use it for any "replace" or "keep".`
     system: SYSTEM_PROMPT,
     prompt,
     maxUses: 8,
-    // Haiku 5.5 runs adaptive thinking by default and counts tokens about 30%
-    // heavier than its predecessor, so reasoning across eight search legs eats
-    // the 16k default before the JSON lands. On 2026-10-31 that killed 9 of 12
-    // drafts - every one with 10 or more required corrections - and published
-    // nothing. Sonnet hit the same ceiling once at 15 issues the day before, so
-    // this is not a Haiku-only ceiling, just one Haiku reaches sooner.
     maxTokens: CORRECTIONS_MAX_TOKENS,
     effort: CORRECT_EFFORT,
     schema: CORRECTIONS_SCHEMA,
