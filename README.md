@@ -30,6 +30,32 @@ npm test        # pipeline + lib unit tests (needs Node 22.18+, which strips
                 # the types in lib/*.test.ts without a build step)
 ```
 
+## Analytics
+
+Google Analytics 4, loaded via `@next/third-parties`. It is off unless
+`NEXT_PUBLIC_GA_ID` is set, so local dev and preview deploys stay out of the
+production property without needing an internal-traffic filter in GA4. Set it on
+the production Vercel environment only:
+
+```
+NEXT_PUBLIC_GA_ID=G-XXXXXXXXXX
+```
+
+Page views, scrolls and outbound clicks come from GA4's own Enhanced Measurement
+— client-side route changes included, as long as *Page changes based on browser
+history events* stays enabled under Admin → Data streams.
+
+On top of that, `components/ArticleLink.tsx` sends one custom event, GA4's
+recommended `select_item`, when a reader clicks a headline. It carries the
+article id, the headline, its 1-based rank in the list, and whether the list was
+the front page or an archive edition — which answers the question page views
+cannot: of the five stories published that day, which one earned the click, and
+did position decide it.
+
+Adding a Google domain here means adding it to the CSP in `next.config.ts` too;
+a missing `connect-src` entry silently drops the hits and the property just looks
+empty. Privacy-policy wording for analytics lives in `app/privacy/page.tsx`.
+
 ## Feeds and crawlable endpoints
 
 | Path                 | What it is                                                          |

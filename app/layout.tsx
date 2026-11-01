@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Script from 'next/script'
 import Link from 'next/link'
+import { GoogleAnalytics } from '@next/third-parties/google'
 import { Inter, Lora } from 'next/font/google'
 import {
   OG_IMAGE_PATH,
@@ -11,6 +12,7 @@ import {
   alternatesFor,
   canonical,
 } from '@/lib/site'
+import { GA_MEASUREMENT_ID } from '@/lib/analytics'
 import { siteSchema } from '@/lib/schema'
 import JsonLd from '@/components/JsonLd'
 import './globals.css'
@@ -223,6 +225,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="max-w-3xl mx-auto px-4 py-10">{children}</main>
         <Footer />
       </body>
+      {/* Google Analytics 4. Loaded after hydration, below <body>, so gtag.js
+          never sits in front of the article text. Absent entirely when
+          NEXT_PUBLIC_GA_ID is unset, which is how local dev and forks stay out
+          of the production property. */}
+      {GA_MEASUREMENT_ID && <GoogleAnalytics gaId={GA_MEASUREMENT_ID} />}
     </html>
   )
 }
