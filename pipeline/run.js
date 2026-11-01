@@ -479,6 +479,9 @@ async function main() {
     const msg = 'No clusters passed validation — no articles generated'
     console.error(`❌ ${msg}`)
     await logError(date, msg)
+    // The costly days are the ones that publish nothing, so spend the two lines
+    // to say what they cost before leaving.
+    usageReport().forEach(l => console.log('   ' + l))
     process.exit(1)
   }
 

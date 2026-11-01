@@ -227,6 +227,13 @@ Searching is available; use it for any "replace" or "keep".`
     system: SYSTEM_PROMPT,
     prompt,
     maxUses: 8,
+    // Haiku 5.5 runs adaptive thinking by default and counts tokens about 30%
+    // heavier than its predecessor, so reasoning across eight search legs eats
+    // the 16k default before the JSON lands. On 2026-10-31 that killed 9 of 12
+    // drafts - every one with 10 or more required corrections - and published
+    // nothing. Sonnet hit the same ceiling once at 15 issues the day before, so
+    // this is not a Haiku-only ceiling, just one Haiku reaches sooner.
+    maxTokens: 32000,
     effort: CORRECT_EFFORT,
     schema: CORRECTIONS_SCHEMA,
     stage: 'corrections',
