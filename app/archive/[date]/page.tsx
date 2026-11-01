@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getArticlesByDate, getArchiveDays } from '@/lib/supabase'
 import { alternatesFor } from '@/lib/site'
+import { LIST_ARCHIVE } from '@/lib/analytics'
 import { breadcrumbSchema } from '@/lib/schema'
 import JsonLd from '@/components/JsonLd'
 import ArticleCard from '@/components/ArticleCard'
@@ -84,7 +85,12 @@ export default async function ArchiveDatePage({
 
       <div>
         {articles.map((article, i) => (
-          <ArticleCard key={article.id} article={article} rank={i + 1} />
+          <ArticleCard
+            key={article.id}
+            article={article}
+            rank={i + 1}
+            listName={LIST_ARCHIVE}
+          />
         ))}
       </div>
 

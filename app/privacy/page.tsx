@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 }
 
 // Shown as "last updated". Bump this whenever the policy text below changes.
-const LAST_UPDATED = 'July 23, 2026'
+const LAST_UPDATED = 'November 1, 2026'
 
 export default function PrivacyPage() {
   return (
@@ -36,8 +36,9 @@ export default function PrivacyPage() {
           <p className="text-sm">
             Neutral News does not ask you to create an account, does not run a newsletter, and does
             not collect names, email addresses, or payment details. We do not sell personal
-            information. The only meaningful data collection on this site comes from our advertising
-            partner, Google, which is described in full below.
+            information. Two Google services do collect data here: Google Analytics, which tells us
+            in aggregate how many people read which stories, and Google AdSense, which serves the
+            advertising that pays for the site. Both are described in full below.
           </p>
         </section>
 
@@ -46,8 +47,8 @@ export default function PrivacyPage() {
             Information we collect
           </h2>
           <p className="text-sm mb-3">
-            We do not operate our own accounts, forms, or trackers. Two categories of data are
-            nonetheless involved in serving this site:
+            We do not operate accounts or forms, and we never ask you for personal details. Three
+            categories of data are nonetheless involved in serving this site:
           </p>
           <ul className="space-y-2.5 text-sm">
             <li className="flex gap-2.5">
@@ -57,6 +58,18 @@ export default function PrivacyPage() {
                 hosting provider, Vercel, records ordinary request information such as IP address,
                 browser type, referring page, and time of request. This is used to serve the site
                 securely and to diagnose faults. We do not use it to build profiles of readers.
+              </span>
+            </li>
+            <li className="flex gap-2.5">
+              <span className="text-slate-300 flex-shrink-0 mt-0.5">—</span>
+              <span>
+                <strong className="font-medium text-slate-900">Audience measurement.</strong> We use
+                Google Analytics to understand how the site is used: how many people visit, which
+                stories they read, which headline they clicked to get there, roughly where in the
+                world they are, and what kind of device they used. Google Analytics does not retain
+                your full IP address, and we never combine this data with anything that would
+                identify you personally. We look at it only in aggregate, to judge which stories are
+                worth the effort of reporting.
               </span>
             </li>
             <li className="flex gap-2.5">
@@ -75,11 +88,26 @@ export default function PrivacyPage() {
 
         <section>
           <h2 className="text-xs uppercase tracking-widest text-slate-500 font-semibold mb-4 pb-2 border-b border-slate-200">
-            Cookies and third-party advertising
+            Cookies, analytics, and advertising
           </h2>
           <div className="space-y-3 text-sm">
             <p>
-              This site is supported by advertising served through Google AdSense. Third-party
+              Google Analytics sets a cookie in your browser so that a second page view can be
+              recognised as the same visit rather than counted as a new one. It records no name,
+              email address, or account, and we do not use it to identify individual readers. You can
+              prevent it entirely with Google&apos;s{' '}
+              <a
+                href="https://tools.google.com/dlpage/gaoptout"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
+              >
+                Analytics opt-out browser add-on
+              </a>
+              , and most ad and tracker blockers already block it.
+            </p>
+            <p>
+              This site is also supported by advertising served through Google AdSense. Third-party
               vendors, including Google, use cookies to serve ads based on your prior visits to this
               website or other websites.
             </p>
@@ -130,11 +158,12 @@ export default function PrivacyPage() {
             Readers in the EEA, UK, and Switzerland
           </h2>
           <p className="text-sm">
-            Where required, Google presents a consent message before setting advertising cookies, and
-            your choice is recorded and honoured by Google&apos;s ad systems. Under the GDPR you have
-            the right to access, correct, or erase personal data held about you, and to object to
-            processing. Because we hold almost no reader data ourselves, most such requests are best
-            directed to Google; we will help where we can if you contact us.
+            Where required, Google presents a consent message before setting advertising or
+            measurement cookies, and your choice is recorded and honoured by Google&apos;s ad and
+            analytics systems. Under the GDPR you have the right to access, correct, or erase personal
+            data held about you, and to object to processing. Because the only reader data we hold is
+            aggregate analytics that does not identify you, most such requests are best directed to
+            Google; we will help where we can if you contact us.
           </p>
         </section>
 

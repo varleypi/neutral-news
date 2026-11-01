@@ -1,14 +1,20 @@
-import Link from 'next/link'
 import { NeutralArticle } from '@/lib/types'
 import { articlePath } from '@/lib/slug'
+import { LIST_HOMEPAGE } from '@/lib/analytics'
 import ValidationBadge from './ValidationBadge'
+import ArticleLink from './ArticleLink'
 
 interface Props {
   article: NeutralArticle
   rank: number
+  /**
+   * Which list this card appears in, for the click event. Defaults to the front
+   * page; the archive passes its own so the two don't pool into one figure.
+   */
+  listName?: string
 }
 
-export default function ArticleCard({ article, rank }: Props) {
+export default function ArticleCard({ article, rank, listName = LIST_HOMEPAGE }: Props) {
   return (
     <article className="border-b border-slate-200 py-7 last:border-0">
       <div className="flex gap-5">
@@ -23,11 +29,18 @@ export default function ArticleCard({ article, rank }: Props) {
             </span>
           </div>
 
-          <Link href={articlePath(article)} className="group">
+          <ArticleLink
+            href={articlePath(article)}
+            articleId={article.id}
+            headline={article.headline}
+            rank={rank}
+            listName={listName}
+            className="group"
+          >
             <h2 className="font-serif text-2xl text-slate-900 leading-snug group-hover:text-slate-600 transition-colors">
               {article.headline}
             </h2>
-          </Link>
+          </ArticleLink>
 
           <p className="mt-2.5 text-slate-600 text-sm leading-relaxed">
             {article.summary}
