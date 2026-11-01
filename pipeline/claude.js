@@ -124,6 +124,14 @@ function recordUsage(stage, model, usage = {}) {
   spend.set(key, row)
 }
 
+/**
+ * The raw rows behind usageReport(), for a caller that wants tokens rather
+ * than money - a probe checking how close a stage came to its output cap.
+ */
+function usageRows() {
+  return [...spend.values()].map(r => ({ ...r }))
+}
+
 function rowCost(r) {
   return r.priced ? r.cost : null
 }
@@ -415,6 +423,7 @@ module.exports = {
   webSearchTool,
   recordUsage,
   usageReport,
+  usageRows,
   TIMEOUT_MS,
   WRITER_MODEL,
   CORRECTOR_MODEL,

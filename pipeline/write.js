@@ -37,6 +37,9 @@ const WRITE_EFFORT = process.env.CLAUDE_WRITE_EFFORT || 'medium'
 // getting them wrong costs a whole candidate. Worth more effort than drafting.
 const CORRECT_EFFORT = process.env.CLAUDE_CORRECT_EFFORT || 'high'
 
+// Exported so the probe asserts against the cap the stage actually uses.
+const CORRECTIONS_MAX_TOKENS = 32000
+
 // Set WRITER_SEARCH=off to fall back to master's non-searching writer - the
 // cheaper shape, at the cost of the stage that was inventing background.
 const WRITER_SEARCHES = process.env.WRITER_SEARCH !== 'off'
@@ -233,7 +236,7 @@ Searching is available; use it for any "replace" or "keep".`
     // drafts - every one with 10 or more required corrections - and published
     // nothing. Sonnet hit the same ceiling once at 15 issues the day before, so
     // this is not a Haiku-only ceiling, just one Haiku reaches sooner.
-    maxTokens: 32000,
+    maxTokens: CORRECTIONS_MAX_TOKENS,
     effort: CORRECT_EFFORT,
     schema: CORRECTIONS_SCHEMA,
     stage: 'corrections',
@@ -383,4 +386,4 @@ Rules, in order of importance:
   }
 }
 
-module.exports = { writeDraft, applyCorrections, stalePromotedClaims }
+module.exports = { writeDraft, applyCorrections, stalePromotedClaims, CORRECTIONS_MAX_TOKENS }

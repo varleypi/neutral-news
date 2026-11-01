@@ -22,8 +22,8 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
-const { client, VERIFIER_MODEL, CORRECTOR_MODEL, webSearchTool } = require('./claude')
-const { writeDraft, applyCorrections } = require('./write')
+const { client, VERIFIER_MODEL, CORRECTOR_MODEL, webSearchTool, usageRows } = require('./claude')
+const { writeDraft, applyCorrections, CORRECTIONS_MAX_TOKENS } = require('./write')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
 const { evaluateGate } = require('./gate')
@@ -395,62 +395,160 @@ async function probeDeadlock() {
  * likelier with more passages and a smaller model, and neither shows up in a
  * single-issue probe, so a model swap on this stage has to clear this one too.
  */
+// ── The load-bearing fixture ─────────────────────────────────────────────────
+// Proposition 40, from the 2026-10-31 edition. That run flagged 12 required
+// corrections on this story and the stage died with "hit its output cap before
+// returning JSON" — one of nine identical deaths that published nothing.
+//
+// Twelve is the point. The first version of this probe handed corrections three
+// passages, passed, and was read as evidence that moving the stage to Haiku was
+// safe. Real editions flag 10 to 19. A probe standing in for an expensive stage
+// is only evidence at the size that stage actually runs at, and three was not a
+// smaller version of twelve - it was a different question.
+//
+// Sentences are declared once here and used both to build the body and to quote
+// the flagged passages, so no excerpt can drift from the text. The earlier probe
+// quoted a sub-sentence clause by hand; corrections works on runs of whole
+// sentences and could never locate it, and the failure read as a verdict on the
+// model rather than a bug in the fixture.
+const PROP40_SENTENCES = [
+  { text: 'California voters will decide Tuesday on Proposition 40, a ballot measure that would impose an annual tax of 5 percent on personal wealth above $1 billion.' },
+  {
+    text: 'Supporters say the measure would raise roughly $100 billion a year, enough to close the state budget shortfall on its own.',
+    flag: { type: 'UNVERIFIABLE', correction: 'The revenue figure is a campaign projection, and "enough to close the shortfall on its own" is the article drawing its own conclusion from it. Attribute both or cut them.' },
+  },
+  {
+    text: 'The tax would reach about 200 California residents.',
+    flag: { type: 'UNSOURCED', correction: 'No cited source gives this count. Source it or cut it.' },
+  },
+  {
+    text: 'Every serious economist agrees that a wealth tax of this design is unenforceable.',
+    flag: { type: 'BIASED', correction: 'This is an overreach stated as consensus. Replace it with what specific named economists have actually said, or cut it.' },
+  },
+  {
+    text: 'Governor Newsom has declined to take a position on the measure.',
+    flag: { type: 'CONTRADICTED', correction: 'Newsom publicly opposed the measure at a press conference on October 28. Correct this.' },
+  },
+  { text: 'The measure has divided California Democrats, with legislative leaders split over whether to back it.' },
+  {
+    text: 'A similar bill died in the legislature in 2024 after the largest public employee unions in the state withdrew their support.',
+    flag: { type: 'UNVERIFIABLE', correction: 'The reason given for the 2024 bill failing is not supported by the cited reporting. Source the causal claim or state only that the bill failed.' },
+  },
+  {
+    text: 'Opponents have spent more than $80 million on television advertising, the largest sum ever recorded in a California ballot fight.',
+    flag: { type: 'UNVERIFIABLE', correction: 'The "largest ever" superlative is unsupported. Keep the spending figure if it is sourced and drop the ranking.' },
+  },
+  {
+    text: 'Billionaires would simply leave the state and take their tax receipts with them.',
+    flag: { type: 'BIASED', correction: 'This states an argument made by opponents as the prediction of the article itself. Attribute it or cut it.' },
+  },
+  {
+    text: 'Early voting has already broken every record in California history.',
+    flag: { type: 'UNVERIFIABLE', correction: 'Unsupported superlative. Give the sourced early-voting figure instead, or cut it.' },
+  },
+  { text: 'Polling released last week showed the measure leading by four points, inside the margin of error of the survey.' },
+  { text: 'The Legislative Analyst Office of the state has said the revenue estimate is highly uncertain and could vary by tens of billions of dollars.' },
+  {
+    text: 'Turnout among voters under 30 has doubled against the last midterm election.',
+    flag: { type: 'UNVERIFIABLE', correction: 'No cited source supports a doubling. Source it or cut it.' },
+  },
+  {
+    text: 'If it passes, California becomes the first state in the country to tax wealth directly.',
+    flag: { type: 'UNVERIFIABLE', correction: 'Other states have enacted narrower wealth-adjacent taxes. Qualify the claim precisely or cut it.' },
+  },
+  {
+    text: 'Constitutional challenges are certain to follow within days of the vote.',
+    flag: { type: 'UNSOURCED', correction: 'Speculation stated as certainty. Attribute the expectation to a named party or cut it.' },
+  },
+  {
+    text: 'The author of the measure has said privately that she expects the tax to be struck down.',
+    flag: { type: 'UNSOURCED', correction: 'A private remark cannot be sourced and should not be reported as fact. Cut it.' },
+  },
+  { text: 'Three other statewide measures are on the same ballot.' },
+]
+
+const PROP40_ARTICLE = {
+  headline: 'California Decides Tuesday on a Wealth Tax That Has Split Its Democrats',
+  summary:
+    'Proposition 40 would tax personal wealth above $1 billion each year. Democrats in the ' +
+    'state are divided over it, and polling puts the result inside the margin of error.',
+  // Two sentences to a paragraph, the shape the writer stage produces.
+  body: PROP40_SENTENCES
+    .map(s => s.text)
+    .reduce((paras, text, i) => {
+      if (i % 2 === 0) paras.push(text)
+      else paras[paras.length - 1] += ' ' + text
+      return paras
+    }, [])
+    .join('\n\n'),
+  keyFacts: [
+    'Proposition 40 would tax personal wealth above $1 billion at 5 percent a year.',
+    'California Democrats are split on the measure, and recent polling is inside the margin of error.',
+  ],
+  references: [
+    'CalMatters — covered the split among legislative Democrats',
+    'Legislative Analyst Office — published the revenue uncertainty estimate',
+  ],
+}
+
+const PROP40_ISSUES = PROP40_SENTENCES
+  .filter(s => s.flag)
+  .map(s => ({ ...s.flag, severity: 'required', excerpt: s.text }))
+
+/** Output tokens the corrections stage has spent so far in this process. */
+function correctionsOutputTokens() {
+  return usageRows()
+    .filter(r => r.stage === 'corrections')
+    .reduce((n, r) => n + r.output, 0)
+}
+
+/**
+ * The probe that should have existed before corrections moved to Haiku: the
+ * stage at the scale a real edition hands it.
+ *
+ * It fails if the false claim survives, if any passage is left unresolved, if
+ * any excerpt could not be located - and, by throwing out of applyCorrections,
+ * if the stage runs out of output budget before returning its JSON. That last
+ * one is what took the 2026-10-31 edition to zero articles.
+ */
 async function probeCorrectionsMulti() {
-  const issues = [
-    {
-      type: 'UNVERIFIABLE',
-      severity: 'required',
-      excerpt: SPACEX_EXCERPT,
-      correction: 'SpaceX is publicly traded on Nasdaq as SPCX since June 2026. Remove or correct this.',
-    },
-    // A whole sentence, deliberately. Corrections acts on runs of consecutive
-    // sentences, so a sub-sentence clause cannot be located however good the
-    // model is - a probe built on one would fail every model and look like a
-    // verdict on the cheap one. (That limit is real in production too: a
-    // `required` issue quoting a clause can never be reported removed.)
-    {
-      type: 'UNSOURCED',
-      severity: 'required',
-      excerpt: 'As of now, the pledge exists only as a public statement from Musk.',
-      correction: 'This characterisation is unsourced as stated. Source it or cut it.',
-    },
-    {
-      type: 'UNVERIFIABLE',
-      severity: 'required',
-      excerpt: 'no regulatory filings describing such a distribution have been reported',
-      correction: 'An absence of filings cannot be confirmed from the cited reporting. Source it or cut it.',
-    },
-  ]
+  const issues = PROP40_ISSUES
+  const before = correctionsOutputTokens()
 
-  const { article, applied, unresolved } = await applyCorrections(SPACEX_ARTICLE, issues, { date: PROBE_DATE })
+  const { article, applied, unresolved } = await applyCorrections(PROP40_ARTICLE, issues, { date: PROBE_DATE })
 
-  const text = `${article.body} ${(article.keyFacts ?? []).join(' ')}`
-  const survived = /(?:is|remains|stays)\s+privately\s+held|shares\s+do\s+not\s+trade|is\s+not\s+publicly\s+traded/i.exec(text)
-  const how = applied.map(a => `${a.action}${a.ok ? '' : ` FAILED(${a.reason})`}`).join(', ') || 'no resolutions'
+  const spent = correctionsOutputTokens() - before
+  const text = [article.headline, article.summary, article.body, ...(article.keyFacts ?? [])].join('\n')
   const failedToLocate = applied.filter(a => !a.ok)
 
   const problems = []
-  if (survived) problems.push(`the false claim survived as "${survived[0]}"`)
-  // The one that matters: a passage with no resolution is a required issue the
-  // gate will block the article on, which is how this stage stalls an edition.
+  if (/every serious economist/i.test(text)) problems.push('the "every serious economist" overreach survived')
+  // A passage with no resolution is a required issue the gate blocks on, which
+  // is the other way this stage stalls an edition.
   if (unresolved.length > 0) problems.push(`${unresolved.length}/${issues.length} passage(s) left unresolved`)
-  if (failedToLocate.length > 0) problems.push(`${failedToLocate.length} excerpt(s) could not be located in the body`)
+  if (failedToLocate.length > 0) {
+    problems.push(
+      `${failedToLocate.length} excerpt(s) could not be located: ` +
+      failedToLocate.map(a => JSON.stringify(a.excerpt.slice(0, 48) + '…')).join(', ')
+    )
+  }
+
+  // Report the headroom either way. A pass with a few hundred tokens to spare
+  // is a pass that the next busy news day turns back into a dead edition, and
+  // that is worth seeing before it happens rather than after.
+  const pct = Math.round((spent / CORRECTIONS_MAX_TOKENS) * 100)
+  const headroom = `${spent} output tokens, ${pct}% of the ${CORRECTIONS_MAX_TOKENS} cap`
 
   if (problems.length > 0) {
-    return {
-      ok: false,
-      detail: [
-        `${CORRECTOR_MODEL}: ${problems.join('; ')} [${how}]`,
-        `       body: ${article.body.replace(/\s+/g, ' ').slice(0, 220)}`,
-      ].join('\n'),
-    }
+    return { ok: false, detail: `${CORRECTOR_MODEL}: ${problems.join('; ')} [${headroom}]` }
   }
 
   return {
     ok: true,
-    detail: `${CORRECTOR_MODEL}: all ${issues.length} passages resolved and located [${how}]; ` +
-      `body ${SPACEX_ARTICLE.body.length} -> ${article.body.length} chars, ` +
-      `keyFacts ${SPACEX_ARTICLE.keyFacts.length} -> ${article.keyFacts.length}`,
+    detail:
+      `${CORRECTOR_MODEL}: all ${issues.length} passages resolved and located; ${headroom}; ` +
+      `body ${PROP40_ARTICLE.body.length} -> ${article.body.length} chars, ` +
+      `keyFacts ${PROP40_ARTICLE.keyFacts.length} -> ${article.keyFacts.length}`,
   }
 }
 
@@ -463,7 +561,7 @@ const PROBES = {
   schema: { run: probeSchema, cost: '1 call' },
   draft: { run: probeDraft, cost: '1 call' },
   corrections: { run: probeCorrections, cost: '1 call' },
-  'corrections-multi': { run: probeCorrectionsMulti, cost: '1 call' },
+  'corrections-multi': { run: probeCorrectionsMulti, cost: '1 call, 12 passages' },
   deadlock: { run: probeDeadlock, cost: '2 calls' },
 }
 
@@ -498,7 +596,11 @@ async function main() {
   process.exit(failed === 0 ? 0 : 1)
 }
 
-main().catch(err => {
-  console.error('Probe runner failed:', err)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Probe runner failed:', err)
+    process.exit(1)
+  })
+}
+
+module.exports = { PROP40_ARTICLE, PROP40_ISSUES }
