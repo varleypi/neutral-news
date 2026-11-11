@@ -48,7 +48,11 @@ const securityHeaders = [
       // region1.google-analytics.com for EU traffic — hence the wildcards.
       // Without these the hits are silently blocked and the property stays empty.
       "connect-src 'self' https://*.supabase.co https://pagead2.googlesyndication.com https://*.adtrafficquality.google https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com",
-      "frame-src https://googleads.g.doubleclick.net https://*.adtrafficquality.google https://tpc.googlesyndication.com",
+      // www.google.com is for https://www.google.com/recaptcha/api2/aframe,
+      // which AdSense frames as part of its invalid-traffic detection. It was
+      // the one frame the policy blocked on both the front page and an article;
+      // Google publishes no allowlist, so this is the observed set, not a guess.
+      "frame-src https://googleads.g.doubleclick.net https://*.adtrafficquality.google https://tpc.googlesyndication.com https://www.google.com",
       "frame-ancestors 'self'",
       "base-uri 'self'",
       "form-action 'self'",
