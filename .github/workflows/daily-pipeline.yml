@@ -60,11 +60,21 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 24, to match probe.yml. On 20 the test script fails before running
+          # a single test: it globs test files and the lib suites are
+          # TypeScript, neither of which 20 supports.
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci
+
+      # Free, and it runs before anything is billed. These are pure functions,
+      # so they cannot catch what actually broke the 10/31 edition - an output
+      # cap is only visible on a live call - but a broken probe fixture or a
+      # regression in applyResolutions should not cost an edition to find.
+      - name: Unit tests
+        run: npm test
 
       - name: Run article generation pipeline
         env:
