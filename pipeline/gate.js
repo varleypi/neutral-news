@@ -163,13 +163,18 @@ function evaluateGate({ article, review, validation, verification }) {
   // correct an article once and publish it, instead of paying to re-verify
   // from scratch to discover that what it just fixed is fixed.
   const contradicted = (verification?.claims ?? []).filter(c => c.verdict === 'CONTRADICTED')
+  const blockedExcerpts = new Set()
   for (const c of contradicted) {
     if (!excerptStillPresent(c.excerpt, body)) continue
+    blockedExcerpts.add(c.excerpt)
     blockers.push({
       kind: 'CONTRADICTED_CLAIM',
       detail: `Current sources contradict: "${c.claim}"`,
       evidence: c.evidence ?? '',
       sources: c.sources ?? [],
+      // The claim itself, so a retry can be aimed at this passage rather than
+      // at everything that was ever flagged.
+      claim: c,
     })
   }
 
@@ -188,30 +193,53 @@ function evaluateGate({ article, review, validation, verification }) {
   const required = (review?.issues ?? []).filter(i => i.severity === 'required')
 
   for (const issue of required) {
-    const present = excerptStillPresent(issue.excerpt, body)
+    // Rule 2 opens with "either the flagged text is gone from the article, or
+    // ..." - so text that is gone is resolved, whatever anyone said about it.
+    // This used to be checked only when the validator offered no disposition,
+    // which meant a passage that had been cut could still fail the article if
+    // the validator described it as "supported" without naming evidence: a
+    // blocker raised about a sentence that was no longer on the page.
+    if (!excerptStillPresent(issue.excerpt, body)) continue
+
+    // A claim the fact-check contradicted, carried here as a required issue so
+    // that corrections gets a chance at it. It is still rule 1's business: no
+    // disposition waives it, and while it stands the article does not publish.
+    // Raising it here as well as above covers a retry, where the contradiction
+    // came from an earlier verification than the one this call was handed.
+    if (issue.type === 'CONTRADICTED') {
+      if (!blockedExcerpts.has(issue.excerpt)) {
+        blockers.push({
+          kind: 'CONTRADICTED_CLAIM',
+          detail: `Current sources contradict: "${issue.excerpt}"`,
+          issue,
+        })
+      }
+      continue
+    }
 
     // Pair the disposition to its issue by excerpt — the validator echoes the
     // excerpt back, and matching on it stops a disposition for one issue being
     // credited to another.
     const d = dispositions.find(x => significantOverlap(x.excerpt, issue.excerpt) >= 0.6)
 
+    // Each blocker below names its issue, so a retry can be aimed at the
+    // passages that actually blocked rather than at everything ever flagged.
     if (!d) {
-      if (!present) continue // silently fixed by the rewrite; nothing to answer for
       blockers.push({
         kind: 'UNANSWERED_REQUIRED_ISSUE',
         detail: `Required ${issue.type} issue was neither removed nor addressed: "${issue.excerpt}"`,
+        issue,
       })
       continue
     }
 
     if (d.disposition === 'removed' || d.disposition === 'corrected') {
       // Trust, but check the article rather than the claim about it.
-      if (present) {
-        blockers.push({
-          kind: 'FALSE_DISPOSITION',
-          detail: `Validation reported this as "${d.disposition}", but the text is still in the article: "${issue.excerpt}"`,
-        })
-      }
+      blockers.push({
+        kind: 'FALSE_DISPOSITION',
+        detail: `Validation reported this as "${d.disposition}", but the text is still in the article: "${issue.excerpt}"`,
+        issue,
+      })
       continue
     }
 
@@ -221,6 +249,7 @@ function evaluateGate({ article, review, validation, verification }) {
           kind: 'UNSUPPORTED_WAIVER',
           detail: `Required ${issue.type} issue was kept as "supported" without external evidence: "${issue.excerpt}"`,
           offeredEvidence: d.evidenceRef ?? '',
+          issue,
         })
       }
       continue
@@ -229,6 +258,7 @@ function evaluateGate({ article, review, validation, verification }) {
     blockers.push({
       kind: 'INVALID_DISPOSITION',
       detail: `Unrecognised disposition "${d.disposition}" for required issue: "${issue.excerpt}"`,
+      issue,
     })
   }
 
@@ -250,11 +280,58 @@ function describeBlockers(blockers) {
   return blockers.map(b => `[${b.kind}] ${b.detail}`)
 }
 
+/**
+ * The passages behind a blocked gate, as issues corrections can act on.
+ *
+ * A retry used to be handed every required issue the first pass ever raised,
+ * most of them long since fixed: on 2026-11-04 one story's second pass was
+ * given 19 passages and could find 4. This returns only what blocked. A
+ * blocker with no passage behind it - the validator declining on its own, the
+ * verifier being down - contributes nothing, because there is nothing there
+ * for an editor to cut or rewrite.
+ */
+function issuesBehind(blockers = []) {
+  const seen = new Set()
+  const issues = []
+  for (const b of blockers) {
+    const issue = b.issue ?? (b.claim ? contradictedIssue(b.claim) : null)
+    if (!issue?.excerpt || seen.has(issue.excerpt)) continue
+    seen.add(issue.excerpt)
+    issues.push(issue)
+  }
+  return issues
+}
+
+/**
+ * A contradicted claim as a required issue.
+ *
+ * The verifier is the one stage that knows what the correct fact is and has
+ * the page open that says so. Handing both to corrections lets the sentence be
+ * put right from evidence already paid for, instead of being searched for a
+ * second time or - as happened until now - not being handed over at all.
+ */
+function contradictedIssue(claim) {
+  const sources = claim.sources ?? []
+  return {
+    type: 'CONTRADICTED',
+    severity: 'required',
+    excerpt: claim.excerpt,
+    correction:
+      `Current sources contradict this. What they show: ${claim.evidence || 'see the sources'}` +
+      (sources.length > 0 ? ` Retrieved by the fact-check: ${sources.join(', ')}.` : '') +
+      ' Replace it with what those sources show, citing one of them, or delete it. It cannot be kept.',
+    sources,
+  }
+}
+
 module.exports = {
   evaluateGate,
   describeBlockers,
+  issuesBehind,
+  contradictedIssue,
   excerptStillPresent,
   evidenceIsExternal,
   significantOverlap,
+  longestCommonRun,
   normalize,
 }

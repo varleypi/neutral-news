@@ -26,7 +26,13 @@ const {
   RESTATEMENT_SCHEMA,
 } = require('./claude')
 const { excerptStillPresent } = require('./gate')
-const { applyResolutions, pruneKeyFacts, supersededExcerpts, enforceSourcedReplacements } = require('./corrections')
+const {
+  applyResolutions,
+  pruneKeyFacts,
+  supersededExcerpts,
+  enforceSourcedReplacements,
+  refuseToKeepContradicted,
+} = require('./corrections')
 
 // Drafting and revision are writing tasks, not reasoning tasks: the research is
 // done by search, not by thinking harder. Medium effort keeps them from
@@ -214,7 +220,24 @@ async function writeDraft(cluster, { date } = {}) {
  * match any sentence is reported here rather than discovered by the validator
  * three paid stages downstream.
  */
-async function applyCorrections(article, requiredIssues, { date } = {}) {
+/** The most searches one correction call may run. */
+const MAX_CORRECTION_SEARCHES = 8
+
+/**
+ * How many searches a correction call is allowed, sized to its workload.
+ *
+ * Each search is billed at a cent on top of the tokens it returns, and this
+ * stage ran 70 times in four editions with a flat budget of 8 whether it had
+ * nineteen passages to resolve or two. A contradicted claim arrives with the
+ * fact-check's own sources attached and needs no search at all, so it is not
+ * counted. Three is the floor: enough to source a rewrite and check it.
+ */
+function correctionSearchBudget(issues = []) {
+  const needSourcing = issues.filter(i => i?.type !== 'CONTRADICTED').length
+  return Math.min(MAX_CORRECTION_SEARCHES, Math.max(3, needSourcing))
+}
+
+async function applyCorrections(article, requiredIssues, { date, evidenceSources = [] } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
   if (requiredIssues.length === 0) return { article, applied: [], unresolved: [] }
 
@@ -244,7 +267,8 @@ For each flagged passage choose exactly one action:
               one costs the whole story.
   "replace" - the claim is salvageable if restated accurately. Put the corrected sentence
               in "replacement", and the URL you confirmed it against in "reference".
-              THE URL IS REQUIRED and must be a page you actually opened in this search.
+              THE URL IS REQUIRED and must be a page you actually opened in this search,
+              or a URL quoted in the flag itself - those the fact-check already retrieved.
               A replacement without one is downgraded to a deletion automatically, so
               leaving it out does not keep the sentence - it only loses you the chance to
               write a better one. Write a complete sentence in the article's voice: it is
@@ -256,16 +280,24 @@ For each flagged passage choose exactly one action:
               without real backing fails the article later just as surely as leaving the
               passage alone would.
 
+Edits are made a whole sentence at a time. When a flagged passage is only part of a sentence,
+"delete" removes the entire sentence it sits in, and a "replacement" stands in for that whole
+sentence - so to drop a clause and keep the rest, choose "replace" and write the sentence out
+again without it.
+
+A passage flagged [CONTRADICTED] cannot be kept: current sources say it is wrong. The flag
+tells you what they show and where. Replace it from those sources, or delete it.
+
 Copy each "excerpt" back exactly as it appears in the FLAGGED PASSAGES list, so the right
 sentence is found. Give one resolution per flagged passage - all ${requiredIssues.length} of them.
 
-Searching is available; use it for any "replace" or "keep".`
+Searching is available; use it for any "replace" or "keep" the flag does not already source.`
 
   const { content, stopReason, sources } = await completeWithSearch({
     model: CORRECTOR_MODEL,
     system: SYSTEM_PROMPT,
     prompt,
-    maxUses: 8,
+    maxUses: correctionSearchBudget(requiredIssues),
     maxTokens: CORRECTIONS_MAX_TOKENS,
     effort: CORRECT_EFFORT,
     schema: CORRECTIONS_SCHEMA,
@@ -275,12 +307,41 @@ Searching is available; use it for any "replace" or "keep".`
   const { resolutions: proposed = [] } = parseSearchResponse(content, stopReason, 'Corrections')
 
   // Nothing new enters the article without a source behind it. A rewrite that
-  // cannot cite a page this step actually opened becomes a deletion.
-  const { resolutions, downgraded } = enforceSourcedReplacements(proposed, sources)
-  if (downgraded.length > 0) {
-    console.log(`   ${downgraded.length} unsourced rewrite(s) downgraded to deletions`)
+  // cannot cite a page actually retrieved - by this step, or by the fact-check
+  // whose findings it is acting on - becomes a deletion.
+  const sourced = enforceSourcedReplacements(proposed, [...sources, ...evidenceSources])
+  if (sourced.downgraded.length > 0) {
+    console.log(`   ${sourced.downgraded.length} unsourced rewrite(s) downgraded to deletions`)
   }
 
+  // And nothing the fact-check contradicted stays on the strength of a "keep".
+  const { resolutions, overruled } = refuseToKeepContradicted(sourced.resolutions, requiredIssues)
+  if (overruled.length > 0) {
+    console.log(`   ${overruled.length} contradicted claim(s) marked "keep" - cut instead; nothing waives a contradiction`)
+  }
+
+  const { article: corrected, applied, unresolved } = await applyEdits(article, resolutions, requiredIssues)
+
+  const counts = resolutions.reduce((acc, r) => ({ ...acc, [r.action]: (acc[r.action] ?? 0) + 1 }), {})
+  console.log(
+    `   Corrections: ${counts.delete ?? 0} deleted, ${counts.replace ?? 0} replaced, ${counts.keep ?? 0} kept with a source` +
+    (applied.some(a => !a.ok) ? ` - ${applied.filter(a => !a.ok).length} could not be located` : '')
+  )
+  for (const a of applied.filter(a => !a.ok)) console.log(`     ! ${a.reason}: "${String(a.excerpt).slice(0, 80)}"`)
+
+  return { article: corrected, applied, unresolved }
+}
+
+/**
+ * Carry a set of decided resolutions through to a finished article.
+ *
+ * Shared by the two callers that edit: corrections, where a model chose each
+ * resolution, and the retry's cut, where there was nothing left to choose.
+ * Everything after the decision is the same either way - the body edit, the
+ * key facts that restated what went, the headline and summary that still
+ * assert it, and the honest account of what is still on the page.
+ */
+async function applyEdits(article, resolutions, requiredIssues) {
   // The model's instructions; our edits.
   const { body, applied } = applyResolutions(article.body, resolutions.filter(r => r.action !== 'keep'))
   // A replacement supersedes the original claim just as a deletion does, so a
@@ -334,14 +395,52 @@ Searching is available; use it for any "replace" or "keep".`
     excerptStillPresent(i.excerpt, fullText)
   )
 
-  const counts = resolutions.reduce((acc, r) => ({ ...acc, [r.action]: (acc[r.action] ?? 0) + 1 }), {})
-  console.log(
-    `   Corrections: ${counts.delete ?? 0} deleted, ${counts.replace ?? 0} replaced, ${counts.keep ?? 0} kept with a source` +
-    (applied.some(a => !a.ok) ? ` - ${applied.filter(a => !a.ok).length} could not be located` : '')
-  )
-  for (const a of applied.filter(a => !a.ok)) console.log(`     ! ${a.reason}: "${String(a.excerpt).slice(0, 80)}"`)
-
   return { article: corrected, applied, unresolved }
+}
+
+// Below this many words an article is not worth publishing as a cut-down of
+// itself. House format is 350-550.
+const MIN_WORDS_AFTER_CUT = Number(process.env.MIN_WORDS_AFTER_CUT) || 200
+
+/**
+ * Cut what a re-check could not support. No model call, no judgement.
+ *
+ * This is the step the retry was missing. It used to run corrections, then
+ * verify the result from scratch, then go straight to the gate - so whatever
+ * the fresh verification found had no stage left that could act on it. After
+ * the retries of 2026-11-01 to 11-04 the blockers were, almost entirely, that
+ * verification's own new findings: 13 claims it ran out of budget to check, 9
+ * it could not confirm and 6 it contradicted, across 17 discarded drafts. Each
+ * of those drafts had been paid for twice over by then.
+ *
+ * Every one of those findings has the same cheapest honest resolution, and it
+ * is the one the correction prompt already states: an article is better short
+ * than wrong. A sentence that could not be stood up on the second look is
+ * removed, and the gate then reads an article in which every claim the
+ * verifier extracted came back supported. That is a higher bar than the first
+ * pass is held to, not a lower one, and it costs nothing.
+ *
+ * It declines to act when the cut would leave too little to publish. The
+ * article is returned untouched and the gate blocks it, as it would have.
+ */
+async function cutUnsupported(article, issues = []) {
+  if (issues.length === 0) return { article, cut: 0 }
+
+  const deletions = issues.map(i => ({ excerpt: i.excerpt, action: 'delete' }))
+  const preview = applyResolutions(article.body, deletions)
+  const words = preview.body.split(/\s+/).filter(Boolean).length
+  if (words < MIN_WORDS_AFTER_CUT) {
+    console.log(`   Cutting ${issues.length} unsupported passage(s) would leave ${words} words - too little to publish, leaving it for the gate`)
+    return { article, cut: 0, tooShort: true }
+  }
+
+  const { article: trimmed, applied, unresolved } = await applyEdits(article, deletions, issues)
+  const cut = applied.filter(a => a.ok).length
+  console.log(
+    `   Cut ${cut} passage(s) the re-check could not support` +
+    (unresolved.length > 0 ? ` - ${unresolved.length} still in the article` : '')
+  )
+  return { article: trimmed, cut, unresolved }
 }
 
 /**
@@ -416,4 +515,12 @@ Rules, in order of importance:
   }
 }
 
-module.exports = { writeDraft, applyCorrections, stalePromotedClaims, CORRECTIONS_MAX_TOKENS }
+module.exports = {
+  writeDraft,
+  applyCorrections,
+  cutUnsupported,
+  correctionSearchBudget,
+  stalePromotedClaims,
+  CORRECTIONS_MAX_TOKENS,
+  MIN_WORDS_AFTER_CUT,
+}

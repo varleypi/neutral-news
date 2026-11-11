@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       probes:
-        description: 'Which probes to run: gate, verify, grok, draft, corrections, schema (space-separated; blank = all).'
+        description: 'Which probes to run: gate, verify, grok, draft, schema, corrections, corrections-multi, deadlock, contradicted (space-separated; blank = all).'
         required: false
       verifier_model:
         description: 'Override the verifier model, e.g. claude-sonnet-5. Blank = default.'

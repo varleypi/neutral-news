@@ -9,7 +9,8 @@
  *   4. Claude revises the article; the review and verification are re-run
  *   5. Claude performs final validation and accounts for each required issue
  *   6. ./gate.js decides — in code — whether the article may publish
- *   7. If the gate blocks, revise once more against the blockers and re-check
+ *   7. If the gate blocks: correct against the blockers, verify the result
+ *      afresh, and cut whatever that second look cannot support
  *   8. Work down the pool until 5 stories pass the gate; store them
  *   9. Trigger a Vercel redeploy so the new edition goes live
  *  10. Post the edition to X as a thread (optional, gated on X_* env vars)
@@ -24,10 +25,10 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') })
 
 const { selectTopClusters } = require('./select')
-const { writeDraft, applyCorrections } = require('./write')
+const { writeDraft, applyCorrections, cutUnsupported } = require('./write')
 const { grokReview, claudeFinalValidation } = require('./review')
-const { verifyClaims, verificationIssues } = require('./verify')
-const { evaluateGate, describeBlockers, excerptStillPresent } = require('./gate')
+const { verifyClaims, verificationIssues, contradictedIssues, settleByVerification } = require('./verify')
+const { evaluateGate, describeBlockers, issuesBehind, excerptStillPresent } = require('./gate')
 const { usageReport } = require('./claude')
 const { storeArticles, updateArticleInPlace, logError, hasAttemptedRun } = require('./store')
 const { postDailyThread } = require('./social')
@@ -45,6 +46,16 @@ const {
 // PIPELINE_MAX_CLUSTERS=N stop after N candidates (keeps a pilot cheap)
 const DRY_RUN = ['1', 'true', 'yes'].includes(String(process.env.PIPELINE_DRY_RUN ?? '').toLowerCase())
 const MAX_CLUSTERS = Number(process.env.PIPELINE_MAX_CLUSTERS) || Infinity
+
+// The two changes of 2026-11-11 that alter what the gate is shown, each with a
+// switch. They went in together and unmeasured - the API account was out of
+// credit - so being able to turn one off without a commit is how the effect of
+// each gets told apart, and how either is undone from a phone if it disappoints.
+//   SETTLE_FLAGS=off  reviewer "unverifiable" flags stay required even when the
+//                     fact-check confirmed the passage
+//   RETRY_CUT=off     the retry verifies and goes straight to the gate, as before
+const SETTLE_FLAGS = String(process.env.SETTLE_FLAGS ?? '').toLowerCase() !== 'off'
+const RETRY_CUT = String(process.env.RETRY_CUT ?? '').toLowerCase() !== 'off'
 
 // What a dry run saw, in the order it saw it — printed as a report at the end.
 const dryRunReport = []
@@ -84,14 +95,29 @@ function isDuplicateStory(candidateText, publishedTexts, threshold = 0.5) {
  * corrections actually change - are the verifier's job and still re-run every
  * pass. The Opus validator also judges neutrality on the final text.
  */
-async function checkArticle(article, cluster, date, { withGrok = true } = {}) {
+async function checkArticle(article, cluster, date, { withGrok = true } = {}, stages = STAGES) {
   const [review, verification] = await Promise.all([
-    withGrok ? grokReview(article, cluster, { date }) : Promise.resolve(EMPTY_REVIEW),
-    verifyClaims(article, cluster, { date }),
+    withGrok ? stages.grokReview(article, cluster, { date }) : Promise.resolve(EMPTY_REVIEW),
+    stages.verifyClaims(article, cluster, { date }),
   ])
   // The verifier's unconfirmed claims join the required-issue queue, so the gate
-  // holds them to the same standard as anything the fact-checker raised.
-  const issues = [...(review.issues ?? []), ...verificationIssues(verification)]
+  // holds them to the same standard as anything the fact-checker raised. So do
+  // the claims it contradicted: it is the one stage that knows the correct fact
+  // and has the page open that says so, and until now that never reached the
+  // stage that could act on it.
+  const raised = [
+    ...(review.issues ?? []),
+    ...verificationIssues(verification),
+    ...contradictedIssues(verification),
+  ]
+  // And the other direction: a passage the reviewer could only call
+  // unverifiable, which the verifier then confirmed, is settled.
+  const { issues, settled } = SETTLE_FLAGS
+    ? settleByVerification(raised, verification)
+    : { issues: raised, settled: [] }
+  if (settled.length > 0) {
+    console.log(`   Fact-check settled ${settled.length} "unverifiable" flag(s) - confirmed against live sources, nothing to correct`)
+  }
   return { review: { ...review, issues }, verification }
 }
 
@@ -113,15 +139,20 @@ function unresolvedRequired(article, review) {
 // only what the verifier raised.
 const EMPTY_REVIEW = { overallScore: null, issues: [], critiqueText: '', reviewer: 'skipped', sourcesConsulted: [] }
 
-async function processCluster(cluster, date) {
+// The paid stages, gathered in one place so a test can stand in for them and
+// exercise the flow between them - the part that has gone wrong most often and
+// that no fixture of a single stage can show.
+const STAGES = { writeDraft, grokReview, verifyClaims, applyCorrections, cutUnsupported, claudeFinalValidation }
+
+async function processCluster(cluster, date, stages = STAGES) {
   console.log(`\n  📰 "${cluster.topicLabel}" (${cluster.outletCount} outlets)`)
 
   // Step 2: Initial draft, researched rather than recalled
-  let article = await writeDraft(cluster, { date })
+  let article = await stages.writeDraft(cluster, { date })
 
   // Steps 3 & 3b: fact-check and claim verification
   console.log(`   Running fact-check and claim verification...`)
-  let { review, verification } = await checkArticle(article, cluster, date)
+  let { review, verification } = await checkArticle(article, cluster, date, {}, stages)
 
   // Step 4: Apply the required corrections.
   //
@@ -136,7 +167,10 @@ async function processCluster(cluster, date) {
   // have blocked on.
   const required = (review.issues ?? []).filter(i => i.severity === 'required')
   if (required.length > 0) {
-    const { article: corrected, unresolved } = await applyCorrections(article, required, { date })
+    const { article: corrected, unresolved } = await stages.applyCorrections(article, required, {
+      date,
+      evidenceSources: verification.sourcesRetrieved ?? [],
+    })
     article = corrected
 
     // Free, and it checks the article rather than the account of it. After a
@@ -164,7 +198,7 @@ async function processCluster(cluster, date) {
 
   // Step 5: Final validation - which now reports rather than decides
   console.log(`   Running Claude final validation...`)
-  let validation = await claudeFinalValidation(article, review, { verification, date })
+  let validation = await stages.claudeFinalValidation(article, review, { verification, date })
 
   // Step 6: The gate. Code, not prose, decides from here.
   let gate = evaluateGate({ article, review, validation, verification })
@@ -177,13 +211,44 @@ async function processCluster(cluster, date) {
 
     const stillRequired = (review.issues ?? []).filter(i => i.severity === 'required')
     if (stillRequired.length > 0) {
-      console.log(`   Applying corrections against the blockers...`)
-      const { article: corrected } = await applyCorrections(article, stillRequired, { date })
-      article = corrected
-      const rechecked = await checkArticle(article, cluster, date, { withGrok: false })
-      review = rechecked.review
+      // (a) Corrections, aimed at what blocked. This used to be handed every
+      // required issue the first pass ever raised - on 2026-11-04 one story's
+      // second pass was given 19 passages and could find 4 of them - which
+      // paid a model to re-decide what was already fixed.
+      const blocking = issuesBehind(gate.blockers)
+      if (blocking.length > 0) {
+        console.log(`   Applying corrections against the blockers...`)
+        const { article: corrected } = await stages.applyCorrections(article, blocking, {
+          date,
+          evidenceSources: verification.sourcesRetrieved ?? [],
+        })
+        article = corrected
+      } else {
+        console.log(`   No passage behind the blockers - re-checking the article as it stands`)
+      }
+
+      // (b) A fresh look at the corrected text, since corrections wrote some
+      // of it and nothing has verified those sentences yet.
+      const rechecked = await checkArticle(article, cluster, date, { withGrok: false }, stages)
       verification = rechecked.verification
-      validation = await claudeFinalValidation(article, review, { verification, date })
+
+      // (c) Act on what that look found. Until now nothing did: the retry
+      // verified, then went straight to the gate, so a claim the second
+      // verification could not stand up had no stage left to remove it and
+      // took the whole draft down with it. Most discarded drafts died here.
+      const fresh = (rechecked.review.issues ?? []).filter(i => i.severity === 'required')
+      if (fresh.length > 0 && RETRY_CUT) {
+        const { article: trimmed } = await stages.cutUnsupported(article, fresh)
+        article = trimmed
+      }
+
+      // (d) The gate holds this pass to the passages that blocked the first
+      // one as well as to whatever the fresh check raised. The first half is
+      // new: a required issue the first pass failed to fix used to drop out of
+      // the gate's sight on the retry, because the review it read was replaced
+      // wholesale by the re-check's.
+      review = { ...rechecked.review, issues: [...blocking, ...(rechecked.review.issues ?? [])] }
+      validation = await stages.claudeFinalValidation(article, review, { verification, date })
       gate = evaluateGate({ article, review, validation, verification })
       console.log(`   After retry: gate ${gate.passed ? 'passed' : 'still blocked'}`)
       if (!gate.passed) describeBlockers(gate.blockers).forEach(b => console.log(`     . ${b}`))
@@ -545,7 +610,13 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('\n💥 Unhandled error:', err)
-  process.exit(1)
-})
+// Only as a script. A test has to be able to load the flow above without
+// starting an edition.
+if (require.main === module) {
+  main().catch(err => {
+    console.error('\n💥 Unhandled error:', err)
+    process.exit(1)
+  })
+}
+
+module.exports = { processCluster, checkArticle }

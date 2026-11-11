@@ -28,6 +28,7 @@ const {
   REVIEW_SCHEMA,
   VALIDATION_SCHEMA,
 } = require('./claude')
+const { excerptStillPresent } = require('./gate')
 
 const GROK_MODEL = process.env.GROK_MODEL || 'grok-4.7'
 
@@ -274,8 +275,21 @@ RESPOND WITH JSON ONLY, as the last thing in your reply:
 async function claudeFinalValidation(article, grokReviewResult, { verification, date } = {}) {
   const today = date || new Date().toISOString().split('T')[0]
 
-  const required = (grokReviewResult.issues ?? []).filter(i => i.severity === 'required')
+  // Only passages still on the page are put to the validator. A flagged
+  // passage that has been cut or rewritten is resolved by the gate's own rule
+  // - the text is gone - and asking about it bought nothing but exposure: the
+  // validator had to describe an edit it never saw made, and every way of
+  // getting that description wrong was a blocker. FALSE_DISPOSITION was raised
+  // 9 times at the first gate across 2026-11-01 to 11-04. It also made this
+  // the one prompt that grew with every correction, on the dearest per-token
+  // model left in the pipeline.
+  const fullText = `${article.headline ?? ''}\n${article.summary ?? ''}\n${article.body ?? ''}\n${(article.keyFacts ?? []).join('\n')}`
+  const allRequired = (grokReviewResult.issues ?? []).filter(i => i.severity === 'required')
+  const required = allRequired.filter(i => excerptStillPresent(i.excerpt, fullText))
   const suggested = (grokReviewResult.issues ?? []).filter(i => i.severity !== 'required')
+  if (required.length < allRequired.length) {
+    console.log(`   ${allRequired.length - required.length} of ${allRequired.length} required issue(s) already gone from the text - validating the ${required.length} still in it`)
+  }
 
   const requiredList = required
     .map((i, n) => `${n + 1}. [${i.type}] "${i.excerpt}"\n   → required fix: ${i.correction}`)
@@ -322,7 +336,10 @@ ${references}
 CLAIM VERIFICATION (checked against live sources — this is external evidence you may cite):
 ${verifiedLines}
 
-REQUIRED ISSUES raised by the fact-checker — you must account for every one:
+REQUIRED ISSUES raised by the fact-checker — you must account for every one.
+Every passage listed here is STILL IN THE ARTICLE above, word for word or nearly; anything
+already cut or rewritten has been left off this list. So "removed" or "corrected" will not be
+true of any of them. What is left to report is whether external evidence backs the passage:
 ${requiredList}
 
 SUGGESTED ISSUES (judgement calls; no accounting needed):
@@ -336,7 +353,8 @@ For each REQUIRED issue, report what actually became of it:
                 can name that evidence: set evidenceType to "reference" and evidenceRef to
                 the reference entry, or evidenceType to "verification" and evidenceRef to a
                 source URL from the CLAIM VERIFICATION section above. If you cannot name
-                one, the honest disposition is not "supported".
+                one, set evidenceType to "none" and leave evidenceRef empty: that is the
+                honest report for a passage nothing backs, and it holds the article back.
 
 Your report is checked mechanically against the article text and against the retrieved
 sources, so a disposition that does not match what is in the article will fail the article

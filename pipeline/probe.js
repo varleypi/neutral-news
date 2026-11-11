@@ -26,7 +26,7 @@ const { client, VERIFIER_MODEL, CORRECTOR_MODEL, webSearchTool, usageRows } = re
 const { writeDraft, applyCorrections, CORRECTIONS_MAX_TOKENS } = require('./write')
 const { verifyClaims } = require('./verify')
 const { grokReview } = require('./review')
-const { evaluateGate } = require('./gate')
+const { evaluateGate, contradictedIssue } = require('./gate')
 
 // ── The fixture ──────────────────────────────────────────────────────────────
 // The article as actually published on 2026-10-19, wrong sentence and all.
@@ -305,6 +305,49 @@ async function probeCorrections() {
   }
 }
 
+/**
+ * Does corrections act on a contradiction from the evidence it is handed?
+ *
+ * Until 2026-11-11 a claim the verifier contradicted was never passed to the
+ * correction step at all. It is now, with what the sources show and the pages
+ * that showed it, and three things about that are prompt behaviour no unit
+ * test can check: that the model does not try to keep the claim, that a clause
+ * quoted out of a sentence is resolved rather than reported unfound, and that
+ * a rewrite may cite the fact-check's page instead of searching again.
+ *
+ * The flagged passage here is deliberately a clause, not the sentence.
+ */
+async function probeContradicted() {
+  const source = 'https://www.nasdaq.com/market-activity/stocks/spcx'
+  const issue = contradictedIssue({
+    claim: 'SpaceX is privately held.',
+    excerpt: 'remains privately held, meaning its shares do not trade on public markets',
+    evidence: 'SpaceX listed on Nasdaq under the ticker SPCX on 2026-06-12 and its shares trade publicly.',
+    sources: [source],
+  })
+
+  const before = usageRows().filter(r => r.stage === 'corrections').reduce((n, r) => n + (r.searches ?? 0), 0)
+  const { article, applied, unresolved } = await applyCorrections(SPACEX_ARTICLE, [issue], {
+    date: PROBE_DATE,
+    evidenceSources: [source],
+  })
+  const searches = usageRows().filter(r => r.stage === 'corrections').reduce((n, r) => n + (r.searches ?? 0), 0) - before
+
+  const text = `${article.headline} ${article.summary} ${article.body} ${(article.keyFacts ?? []).join(' ')}`
+  const survived = /(?:is|remains|stays)\s+privately\s+held|shares\s+do\s+not\s+trade|is\s+not\s+publicly\s+traded/i.exec(text)
+  const how = applied.map(a => `${a.action}${a.ok ? '' : ` FAILED(${a.reason})`}`).join(', ') || 'no resolutions'
+
+  const problems = []
+  if (survived) problems.push(`the contradicted claim survived as "${survived[0]}"`)
+  if (applied.some(a => !a.ok)) problems.push('the clause could not be located')
+  if (unresolved.length > 0) problems.push(`${unresolved.length} issue(s) left unresolved`)
+
+  const detail = `${CORRECTOR_MODEL}: [${how}], ${searches} search(es) run`
+  return problems.length > 0
+    ? { ok: false, detail: `${problems.join('; ')} - ${detail}` }
+    : { ok: true, detail: `contradicted clause resolved - ${detail}` }
+}
+
 // The 2026-10-30 Alphabet article, reduced to the shape that deadlocked it:
 // the flagged claim is in the summary, and the body says the opposite. Nothing
 // a correction pass did to the body could remove it, so the gate blocked the
@@ -563,6 +606,7 @@ const PROBES = {
   corrections: { run: probeCorrections, cost: '1 call' },
   'corrections-multi': { run: probeCorrectionsMulti, cost: '1 call, 12 passages' },
   deadlock: { run: probeDeadlock, cost: '2 calls' },
+  contradicted: { run: probeContradicted, cost: '1 call' },
 }
 
 async function main() {

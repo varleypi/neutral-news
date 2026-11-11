@@ -25,6 +25,8 @@
  * survives that kind of drift and still edits cleanly.
  */
 
+const { longestCommonRun } = require('./gate')
+
 const STOPWORDS = new Set([
   'the', 'a', 'an', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'at', 'for',
   'with', 'by', 'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'that',
@@ -100,7 +102,79 @@ function locateExcerpt(sentences, excerpt) {
     }
   }
 
-  return best && best.score >= MATCH_THRESHOLD ? best : null
+  if (best && best.score >= MATCH_THRESHOLD) return best
+  return locateContained(sentences, excerpt)
+}
+
+/** How much of a part-sentence excerpt has to run unbroken through the text. */
+const CONTAINED_RUN = 0.8
+
+/** Below this many words an excerpt has to match exactly, and only once. */
+const SHORT_EXCERPT = 6
+
+/** Every word in order, stopwords included - a run is about position. */
+function orderedWords(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[^a-z0-9' ]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+/**
+ * Locate an excerpt that is only part of a sentence.
+ *
+ * The matcher above scores a window of whole sentences against the excerpt in
+ * both directions, on purpose: coverage alone would let three words swallow a
+ * paragraph. The cost of that is that a reviewer who quotes a clause - "a
+ * former Wayne County public health director", out of a thirty-word sentence -
+ * can never be matched, because the sentence is mostly not the clause.
+ *
+ * That was not a corner case. Over the editions of 2026-11-01 to 11-04 the
+ * first correction pass reported 82 passages it could not find, and reviewers
+ * quote clauses constantly. A passage that cannot be found cannot be cut, so it
+ * reaches the gate intact, where the only outcomes left are the two blockers
+ * for text that is still there: UNSUPPORTED_WAIVER and FALSE_DISPOSITION. The
+ * first gate raised those 45 times across those editions and 17 of 41 drafts
+ * were discarded. How many of the 45 began as an unfound passage the logs
+ * cannot say - they cut excerpts at 80 characters - but the ones that can be
+ * read in full ("a former Wayne County public health director", "kitchen-table
+ * issue") are clauses.
+ *
+ * So when the sentence-sized match fails, look for the excerpt's words running
+ * unbroken inside one sentence, or straddling two. Contiguity is what keeps
+ * this from being the bag-of-words match the comment above warns about: the
+ * words have to appear together and in order, not merely somewhere nearby.
+ *
+ * The edit still happens to the whole sentence - a deletion removes it and a
+ * replacement stands in for it. Cutting a clause out of the middle of a
+ * sentence by string surgery would leave grammar to chance.
+ */
+function locateContained(sentences, excerpt) {
+  const wanted = orderedWords(excerpt)
+  if (wanted.length < 3) return null // two words turn up everywhere
+
+  const short = wanted.length < SHORT_EXCERPT
+  const need = short ? 1 : CONTAINED_RUN
+  const sentenceWords = sentences.map(orderedWords)
+
+  for (const span of [1, 2]) {
+    const hits = []
+    for (let start = 0; start + span <= sentences.length; start++) {
+      const window = sentenceWords.slice(start, start + span).flat()
+      const score = longestCommonRun(wanted, window) / wanted.length
+      if (score >= need) hits.push({ start, end: start + span, score, contained: true })
+    }
+    if (hits.length === 0) continue
+    // A short phrase found in two different places is not an address. Better
+    // to report it unfound than to cut the wrong sentence.
+    if (short && span === 1 && hits.length > 1) return null
+    return hits.reduce((a, b) => (b.score > a.score ? b : a))
+  }
+
+  return null
 }
 
 /**
@@ -232,6 +306,32 @@ function enforceSourcedReplacements(resolutions = [], retrievedUrls = []) {
 }
 
 /**
+ * A contradicted claim cannot be kept, whatever the correction step preferred.
+ *
+ * "Keep" means the passage is right as it stands. For a claim the fact-check
+ * has just shown to be wrong, with the page open that says so, that is not an
+ * available answer - the gate will not waive it, so honouring the keep only
+ * spends a validation finding that out. The choice here is the one the gate
+ * would have forced anyway: put it right from the sources, or cut it.
+ */
+function refuseToKeepContradicted(resolutions = [], issues = []) {
+  const contradicted = issues
+    .filter(i => i?.type === 'CONTRADICTED')
+    .map(i => significantWords(i.excerpt))
+  const overruled = []
+
+  const enforced = resolutions.map(r => {
+    if (r?.action !== 'keep') return r
+    const words = significantWords(r.excerpt)
+    if (!contradicted.some(c => matchScore(c, words) >= 0.8)) return r
+    overruled.push(r.excerpt)
+    return { ...r, action: 'delete' }
+  })
+
+  return { resolutions: enforced, overruled }
+}
+
+/**
  * Excerpts whose claim no longer stands, taken from what actually applied.
  *
  * Both a deletion and a replacement supersede the original claim, and key
@@ -253,6 +353,8 @@ module.exports = {
   applyResolutions,
   supersededExcerpts,
   enforceSourcedReplacements,
+  refuseToKeepContradicted,
+  locateContained,
   canonicalizeUrl,
   pruneKeyFacts,
   locateExcerpt,

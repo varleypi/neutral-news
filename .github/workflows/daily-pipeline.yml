@@ -35,6 +35,12 @@ on:
       writer_max_searches:
         description: 'Writer search budget. Default 6. Lower is cheaper but thin drafting is what gets drafts discarded.'
         required: false
+      settle_flags:
+        description: 'Set to off to keep reviewer "unverifiable" flags required even when the fact-check confirmed them.'
+        required: false
+      retry_cut:
+        description: 'Set to off to stop the retry cutting what its re-check cannot support (the old behaviour).'
+        required: false
       writer_search:
         description: 'Set to off to stop the writer searching (cheapest, but it invents background).'
         required: false
@@ -107,6 +113,8 @@ jobs:
           CLAUDE_CORRECTOR_MODEL: ${{ github.event.inputs.corrector_model }}
           CLAUDE_VALIDATOR_MODEL: ${{ github.event.inputs.validator_model }}
           WRITER_MAX_SEARCHES: ${{ github.event.inputs.writer_max_searches }}
+          SETTLE_FLAGS: ${{ github.event.inputs.settle_flags }}
+          RETRY_CUT: ${{ github.event.inputs.retry_cut }}
           WRITER_SEARCH: ${{ github.event.inputs.writer_search }}
           SKIP_SOCIAL: ${{ github.event.inputs.skip_social }}
         run: node pipeline/run.js

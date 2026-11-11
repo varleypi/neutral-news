@@ -105,7 +105,7 @@ const PRICES = {
 // Web search is billed per search, on top of the tokens its results cost:
 // $10 per 1,000 (platform.claude.com/docs/en/about-claude/pricing, read
 // 2026-11-11). Until that date this report priced tokens only, which left out
-// roughly half the bill. The four editions of 2026-11-01 to 11-04 made 70
+// something like 40% of the bill. The four editions of 2026-11-01 to 11-04 made 70
 // verification calls at a budget of 14 searches, 70 correction calls at 8 and
 // 41 drafts at 6 - up to about 1,790 searches, or some $4.50 a day, against the
 // $6.71 a day in tokens those runs printed. On the Haiku stages a search costs

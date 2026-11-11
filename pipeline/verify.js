@@ -28,6 +28,7 @@ const {
   collectSearchErrors,
   VERIFIER_MODEL,
 } = require('./claude')
+const { contradictedIssue, normalize, significantOverlap, longestCommonRun } = require('./gate')
 
 // This is the stage the whole change exists for, and the only one whose job is
 // genuinely to reason about evidence. It keeps full effort while the writing
@@ -236,4 +237,90 @@ function verificationIssues(verification) {
     }))
 }
 
-module.exports = { verifyClaims, verificationIssues }
+/** Contradicted claims as required issues, so corrections is handed them. */
+function contradictedIssues(verification) {
+  return (verification?.claims ?? [])
+    .filter(c => c.verdict === 'CONTRADICTED' && c.excerpt)
+    .map(contradictedIssue)
+}
+
+/** How much of a flagged passage has to sit, unbroken, inside the checked one. */
+const SETTLE_RUN = 0.8
+
+/** How much of it the verifier's own account of the claim has to mention. */
+const SETTLE_TOPIC = 0.5
+
+/**
+ * Does this supported claim cover the flagged passage?
+ *
+ * Two keys, because one is not enough. The verifier quotes the sentence its
+ * claim came from, and a sentence often carries more than one claim: "El-Sayed,
+ * a former Wayne County public health director, won by five points" can be
+ * quoted in support of the margin while saying nothing about his old job. So
+ * the passage has to be inside the quoted text AND the verifier's own words
+ * about what it checked - its statement of the claim and the evidence it found
+ * - have to be about the same thing, down to any figure the passage gives.
+ */
+function claimCovers(claim, excerpt) {
+  const wanted = normalize(excerpt).split(' ').filter(Boolean)
+  if (wanted.length < 3) return false
+
+  const quoted = normalize(claim.excerpt).split(' ').filter(Boolean)
+  if (longestCommonRun(wanted, quoted) / wanted.length < SETTLE_RUN) return false
+
+  const account = `${claim.claim ?? ''} ${claim.evidence ?? ''}`
+  if (significantOverlap(excerpt, account) < SETTLE_TOPIC) return false
+
+  const accountWords = new Set(normalize(account).split(' '))
+  return wanted.filter(w => /\d/.test(w)).every(n => accountWords.has(n))
+}
+
+/**
+ * Let the fact-check settle what the reviewer could only flag.
+ *
+ * The reviewer has no web access. Its instructions say so, and tell it to
+ * "flag what the headlines do not support as UNVERIFIABLE and let the
+ * fact-check settle it". Nothing ever did the settling. Every such flag went
+ * to corrections as a required issue whether or not the verifier had, in the
+ * same minute, confirmed that very passage against live sources.
+ *
+ * The writer researches beyond the headlines by design, so most of a good
+ * article is "not in the headlines". Across 2026-11-01 to 11-04 the reviewer
+ * raised 12.3 issues an article while the verifier found 622 of 746 claims
+ * supported, and corrections was asked for 758 resolutions - 436 of them
+ * rewrites, each a new sentence by a cheaper model than the one that wrote the
+ * article, and each one more thing for the gate to trip on. UNVERIFIABLE was
+ * the commonest reason an article failed its first gate, 21 times.
+ *
+ * So an UNVERIFIABLE flag on a passage the verifier marked SUPPORTED, with a
+ * page it actually retrieved, is settled here and stops being required. This
+ * is a stricter test than the one it replaces: the gate already accepts
+ * "supported" for such a flag if the validator cites any URL the verifier
+ * retrieved, whether or not that page has anything to do with the passage.
+ *
+ * Only UNVERIFIABLE. Bias, imbalance and editorialising are not questions of
+ * fact and no source settles them.
+ */
+function settleByVerification(issues = [], verification) {
+  const supported = (verification?.claims ?? [])
+    .filter(c => c.verdict === 'SUPPORTED' && c.excerpt && (c.sources ?? []).length > 0)
+  const settled = []
+
+  const out = issues.map(issue => {
+    if (issue?.severity !== 'required' || issue.type !== 'UNVERIFIABLE') return issue
+    const by = supported.find(c => claimCovers(c, issue.excerpt))
+    if (!by) return issue
+    const resolved = {
+      ...issue,
+      severity: 'suggested',
+      settledBy: { claim: by.claim, sources: by.sources },
+      correction: `Settled by the fact-check, which confirmed this against live sources: ${by.claim} (${by.sources[0]})`,
+    }
+    settled.push(resolved)
+    return resolved
+  })
+
+  return { issues: out, settled }
+}
+
+module.exports = { verifyClaims, verificationIssues, contradictedIssues, settleByVerification, claimCovers }
