@@ -33,7 +33,7 @@ on:
         description: 'Validator model. Default claude-sonnet-5; set claude-opus-4-8 to undo that.'
         required: false
       writer_max_searches:
-        description: 'Writer search budget. Default 4; 6 was the old value. Lower is cheaper, thinner background.'
+        description: 'Writer search budget. Default 6. Lower is cheaper but thin drafting is what gets drafts discarded.'
         required: false
       writer_search:
         description: 'Set to off to stop the writer searching (cheapest, but it invents background).'

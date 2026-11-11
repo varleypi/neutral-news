@@ -60,13 +60,25 @@ const CORRECTIONS_MAX_TOKENS = 64000
 // cheaper shape, at the cost of the stage that was inventing background.
 const WRITER_SEARCHES = process.env.WRITER_SEARCH !== 'off'
 
-// Searches the writer may run per draft. Once verification and corrections
-// moved to Haiku, drafting became the dearest stage in the pipeline - 45% of
-// the bill over 2026-11-01 to 11-04, averaging $2.61 a day - and almost all of
-// its ~115k input tokens a call are search results rather than prompt. Was 6.
-// Lower means thinner background, which is the quality this buys: raise it
-// back with WRITER_MAX_SEARCHES if drafts start arriving underfed.
-const WRITER_MAX_SEARCHES = Number(process.env.WRITER_MAX_SEARCHES) || 4
+// Searches the writer may run per draft.
+//
+// This was briefly cut to 4 on cost grounds: once verification and corrections
+// moved to Haiku, drafting was the dearest stage at 45% of the bill, and
+// almost all of its ~115k input tokens a call are search results rather than
+// prompt. Reading the four editions of 2026-11-01 to 11-04 undid that.
+//
+// Those runs drafted 41 stories to publish 20, so about half the bill - near
+// $3 a day of $5.86 - went on drafts the gate discarded. Attributing per
+// candidate, the sharpest difference between a draft that survived and one
+// that did not was UNVERIFIED claims, at 1.59 against 0.38: the verifier
+// searched and found nothing supporting them. That is the writer producing
+// claims no source backs, and no amount of verifier budget fixes it. Starving
+// the writer of searches to save $0.85 a day, when thin drafting plausibly
+// drives a $3 a day loss, is the wrong side of that trade.
+//
+// Said plainly: 4 was never run, so this is inference, not measurement. The
+// figure that would settle it is drafts per published article, currently 2.05.
+const WRITER_MAX_SEARCHES = Number(process.env.WRITER_MAX_SEARCHES) || 6
 
 const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
 voice blends three sensibilities:
