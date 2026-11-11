@@ -102,9 +102,20 @@ const PRICES = {
   'grok-4.7': { input: 2, output: 6 },
 }
 
+// Web search is billed per search, on top of the tokens its results cost:
+// $10 per 1,000 (platform.claude.com/docs/en/about-claude/pricing, read
+// 2026-11-11). Until that date this report priced tokens only, which left out
+// roughly half the bill. The four editions of 2026-11-01 to 11-04 made 70
+// verification calls at a budget of 14 searches, 70 correction calls at 8 and
+// 41 drafts at 6 - up to about 1,790 searches, or some $4.50 a day, against the
+// $6.71 a day in tokens those runs printed. On the Haiku stages a search costs
+// more than the tokens it returns, so the number of searches is a lever in its
+// own right and not a detail of the token count.
+const WEB_SEARCH_FEE = 10 / 1000
+
 const spend = new Map()
 
-/** What one call cost, with any long-prompt tier applied. `null` if unpriced. */
+/** What one call cost in tokens, with any long-prompt tier applied. `null` if unpriced. */
 function callCost(model, input, output) {
   const p = PRICES[model]
   if (!p) return null
@@ -117,13 +128,15 @@ function callCost(model, input, output) {
 function recordUsage(stage, model, usage = {}) {
   const key = `${stage}|${model}`
   const row = spend.get(key) ??
-    { stage, model, calls: 0, input: 0, output: 0, cached: 0, cost: 0, longCalls: 0, priced: true }
+    { stage, model, calls: 0, input: 0, output: 0, cached: 0, cost: 0, searches: 0, longCalls: 0, priced: true }
   const input = usage.input_tokens ?? usage.prompt_tokens ?? 0
   const output = usage.output_tokens ?? usage.completion_tokens ?? 0
   row.calls += 1
   row.input += input
   row.output += output
   row.cached += usage.cache_read_input_tokens ?? 0
+  // The API's own count of searches run, not the budget we set.
+  row.searches += usage.server_tool_use?.web_search_requests ?? 0
 
   const cost = callCost(model, input, output)
   if (cost === null) row.priced = false
@@ -142,15 +155,16 @@ function usageRows() {
   return [...spend.values()].map(r => ({ ...r }))
 }
 
+/** Tokens plus search fees. `null` when the model's token rate is unknown. */
 function rowCost(r) {
-  return r.priced ? r.cost : null
+  return r.priced ? r.cost + (r.searches ?? 0) * WEB_SEARCH_FEE : null
 }
 
 /** Lines for the end of a run, dearest stage first. */
 function usageReport() {
   const rows = [...spend.values()].sort((a, b) => (rowCost(b) ?? 0) - (rowCost(a) ?? 0))
   if (rows.length === 0) return ['No model calls recorded']
-  const out = ['stage                model             calls      input     output      ~cost']
+  const out = ['stage                model             calls      input     output searches      ~cost']
   let total = 0
   for (const r of rows) {
     const c = rowCost(r)
@@ -158,12 +172,15 @@ function usageReport() {
     out.push(
       r.stage.padEnd(20) + r.model.padEnd(18) +
       String(r.calls).padStart(5) + String(r.input).padStart(11) + String(r.output).padStart(11) +
+      String(r.searches ?? 0).padStart(9) +
       (c === null ? '          ?' : ('$' + c.toFixed(2)).padStart(11)) +
       (r.longCalls > 0 ? `  * ${r.longCalls}/${r.calls} over 100K` : '')
     )
   }
-  out.push(`${''.padEnd(38)}${String([...spend.values()].reduce((a, r) => a + r.calls, 0)).padStart(5)}${''.padStart(22)}${('$' + total.toFixed(2)).padStart(11)}`)
-  out.push('(estimate: list prices, no discounts or cache pricing applied)')
+  const sumOf = key => [...spend.values()].reduce((a, r) => a + (r[key] ?? 0), 0)
+  const searches = sumOf('searches')
+  out.push(`${''.padEnd(38)}${String(sumOf('calls')).padStart(5)}${''.padStart(22)}${String(searches).padStart(9)}${('$' + total.toFixed(2)).padStart(11)}`)
+  out.push(`(estimate: list prices, no discounts or cache pricing applied; includes $${(searches * WEB_SEARCH_FEE).toFixed(2)} of web search at $10 per 1,000)`)
   if (rows.some(r => r.longCalls > 0)) {
     out.push('(* billed at the long-prompt tier - search results push these over 100K)')
   }
@@ -434,6 +451,7 @@ module.exports = {
   recordUsage,
   usageReport,
   usageRows,
+  WEB_SEARCH_FEE,
   TIMEOUT_MS,
   WRITER_MODEL,
   CORRECTOR_MODEL,

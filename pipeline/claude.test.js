@@ -22,6 +22,10 @@ const {
   collectText,
   collectSearchSources,
   collectSearchErrors,
+  recordUsage,
+  usageReport,
+  usageRows,
+  WEB_SEARCH_FEE,
 } = require('./claude')
 
 // ── Naming the real cause of a parse failure ────────────────────────────────
@@ -145,4 +149,29 @@ test('a search error block yields no sources and is reported', () => {
   ]
   assert.deepEqual(collectSearchSources(content), [])
   assert.deepEqual(collectSearchErrors(content), ['max_uses_exceeded'])
+})
+
+// ── What a run cost ──────────────────────────────────────────────────────────
+
+test('searches are billed on top of tokens, at the count the API reports', () => {
+  assert.equal(WEB_SEARCH_FEE, 0.01)
+  const stage = 'test-search-fee'
+  // 50,000 input and 2,000 output on Haiku is $0.006; fourteen searches is $0.14.
+  recordUsage(stage, 'claude-haiku-5-5', { input_tokens: 50_000, output_tokens: 2_000, server_tool_use: { web_search_requests: 14 } })
+  recordUsage(stage, 'claude-haiku-5-5', { input_tokens: 10_000, output_tokens: 1_000 })
+
+  const row = usageRows().find(r => r.stage === stage)
+  assert.equal(row.searches, 14)
+
+  const line = usageReport().find(l => l.startsWith(stage))
+  assert.match(line, /\b14\b/)
+  assert.match(line, /\$0\.15/, 'the fee is in the cost, not beside it')
+  assert.ok(usageReport().some(l => /web search at \$10 per 1,000/.test(l)))
+})
+
+test('a stage that never searched is charged no fee', () => {
+  const stage = 'test-no-search'
+  recordUsage(stage, 'claude-sonnet-5', { input_tokens: 100_000, output_tokens: 10_000 })
+  assert.equal(usageRows().find(r => r.stage === stage).searches, 0)
+  assert.match(usageReport().find(l => l.startsWith(stage)), /\$0\.30/)
 })
