@@ -60,6 +60,14 @@ const CORRECTIONS_MAX_TOKENS = 64000
 // cheaper shape, at the cost of the stage that was inventing background.
 const WRITER_SEARCHES = process.env.WRITER_SEARCH !== 'off'
 
+// Searches the writer may run per draft. Once verification and corrections
+// moved to Haiku, drafting became the dearest stage in the pipeline - 45% of
+// the bill over 2026-11-01 to 11-04, averaging $2.61 a day - and almost all of
+// its ~115k input tokens a call are search results rather than prompt. Was 6.
+// Lower means thinner background, which is the quality this buys: raise it
+// back with WRITER_MAX_SEARCHES if drafts start arriving underfed.
+const WRITER_MAX_SEARCHES = Number(process.env.WRITER_MAX_SEARCHES) || 4
+
 const SYSTEM_PROMPT = `You are a senior newswriter for a neutral, factual news outlet. Your writing
 voice blends three sensibilities:
   • Walter Cronkite — calm, plainspoken authority; short declarative sentences; a steady narrative
@@ -168,7 +176,7 @@ async function writeDraft(cluster, { date } = {}) {
     model: WRITER_MODEL,
     system: SYSTEM_PROMPT,
     prompt: buildDraftPrompt(cluster, today),
-    maxUses: 6,
+    maxUses: WRITER_MAX_SEARCHES,
     effort: WRITE_EFFORT,
     schema: ARTICLE_SCHEMA,
     stage: 'draft',

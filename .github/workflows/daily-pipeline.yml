@@ -29,6 +29,12 @@ on:
       corrector_model:
         description: 'Corrections model. Default claude-haiku-5-5; set claude-sonnet-5 to undo that.'
         required: false
+      validator_model:
+        description: 'Validator model. Default claude-sonnet-5; set claude-opus-4-8 to undo that.'
+        required: false
+      writer_max_searches:
+        description: 'Writer search budget. Default 4; 6 was the old value. Lower is cheaper, thinner background.'
+        required: false
       writer_search:
         description: 'Set to off to stop the writer searching (cheapest, but it invents background).'
         required: false
@@ -89,6 +95,8 @@ jobs:
           CLAUDE_VERIFIER_MODEL: ${{ github.event.inputs.verifier_model }}
           VERIFY_MAX_SEARCHES: ${{ github.event.inputs.verify_max_searches }}
           CLAUDE_CORRECTOR_MODEL: ${{ github.event.inputs.corrector_model }}
+          CLAUDE_VALIDATOR_MODEL: ${{ github.event.inputs.validator_model }}
+          WRITER_MAX_SEARCHES: ${{ github.event.inputs.writer_max_searches }}
           WRITER_SEARCH: ${{ github.event.inputs.writer_search }}
           SKIP_SOCIAL: ${{ github.event.inputs.skip_social }}
         run: node pipeline/run.js

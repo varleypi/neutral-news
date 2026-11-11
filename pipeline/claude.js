@@ -12,8 +12,18 @@ const client = new Anthropic({
 })
 
 const WRITER_MODEL = process.env.CLAUDE_WRITER_MODEL || 'claude-sonnet-5'
-// The validator is the publish gate; its approval rate is calibrated on Opus.
-const VALIDATOR_MODEL = process.env.CLAUDE_VALIDATOR_MODEL || 'claude-opus-4-8'
+// The validator is the publish gate. Measured over 2026-11-01 to 11-04 it was
+// 22% of the Anthropic bill - about $1.31 of $5.86 a day - for a stage that
+// runs no searches and reads roughly 7k input tokens a call. That is Opus
+// pricing on a small prompt, so it moves to Sonnet 5 at $2/$10 against $5/$25.
+//
+// The caveat is real and worth watching: the approval rate was calibrated on
+// Opus. If Sonnet approves more freely the gate gets weaker, and if it approves
+// less freely the pool shrinks and the pipeline pays to draft more candidates
+// than it publishes - which would give the saving straight back. Set
+// CLAUDE_VALIDATOR_MODEL=claude-opus-4-8 to undo this without a commit; the
+// figure to compare is first-pass approvals per edition, not the cost line.
+const VALIDATOR_MODEL = process.env.CLAUDE_VALIDATOR_MODEL || 'claude-sonnet-5'
 // The verifier gathers evidence and judges claims against it. It went Opus ->
 // Sonnet -> Haiku, each step measured against the same fixture: the published
 // 10/19 SpaceX article, which every one of them marked CONTRADICTED with real
