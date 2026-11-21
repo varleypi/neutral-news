@@ -32,6 +32,25 @@ npm test        # pipeline + lib unit tests (needs Node 22.18+, which strips
 
 ## Analytics
 
+Two of them, deliberately, because they answer different questions.
+
+### Vercel Web Analytics
+
+The daily visitor count, on the Vercel dashboard next to the deployments.
+`<Analytics />` from `@vercel/analytics/next` in the root layout, production
+only. There is nothing to configure here and no key to set — it has to be
+switched on per project under Vercel → Analytics, and the script is served
+from `/_vercel/insights` on our own origin, a route that exists only on a
+Vercel deployment. Both facts are why it is gated on `NODE_ENV`: off a Vercel
+box the route 404s, and the dev build of the script loads cross-origin from
+`va.vercel-scripts.com`, which the CSP in `next.config.ts` does not allow.
+
+Hobby accounts include 50,000 events per month and cannot buy more —
+collection simply pauses until the next cycle, so it fails quiet rather than
+expensive. One page view is one event.
+
+### Google Analytics 4
+
 Google Analytics 4, loaded via `@next/third-parties`. It is off unless
 `NEXT_PUBLIC_GA_ID` is set, so local dev and preview deploys stay out of the
 production property without needing an internal-traffic filter in GA4. Set it on

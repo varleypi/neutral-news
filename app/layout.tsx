@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import Link from 'next/link'
 import { GoogleAnalytics } from '@next/third-parties/google'
+import { Analytics } from '@vercel/analytics/next'
 import { Inter, Lora } from 'next/font/google'
 import {
   OG_IMAGE_PATH,
@@ -16,6 +17,8 @@ import { GA_MEASUREMENT_ID } from '@/lib/analytics'
 import { siteSchema } from '@/lib/schema'
 import JsonLd from '@/components/JsonLd'
 import './globals.css'
+
+const isProduction = process.env.NODE_ENV === 'production'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 const lora = Lora({ subsets: ['latin'], variable: '--font-lora' })
@@ -224,6 +227,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Masthead />
         <main className="max-w-3xl mx-auto px-4 py-10">{children}</main>
         <Footer />
+        {/* Vercel Web Analytics. Renders no DOM of its own; it fetches its
+            script from /_vercel/insights on our own origin, so the CSP needs
+            no new entry. That route only exists on a Vercel deployment, and
+            the dev build of the script is served cross-origin from
+            va.vercel-scripts.com, which our CSP deliberately does not allow,
+            so this is production only. There is no measurement ID to set:
+            the switch lives in the Vercel dashboard, which is the whole
+            reason for running it next to GA4. */}
+        {isProduction && <Analytics />}
       </body>
       {/* Google Analytics 4. Loaded after hydration, below <body>, so gtag.js
           never sits in front of the article text. Absent entirely when
