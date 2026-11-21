@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import Link from 'next/link'
 import { GoogleAnalytics } from '@next/third-parties/google'
+import { Analytics } from '@vercel/analytics/next'
 import { Inter, Lora } from 'next/font/google'
 import {
   OG_IMAGE_PATH,
@@ -224,6 +225,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Masthead />
         <main className="max-w-3xl mx-auto px-4 py-10">{children}</main>
         <Footer />
+        <Analytics />
       </body>
       {/* Google Analytics 4. Loaded after hydration, below <body>, so gtag.js
           never sits in front of the article text. Absent entirely when
